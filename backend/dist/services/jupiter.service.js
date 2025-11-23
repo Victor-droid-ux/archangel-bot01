@@ -1,110 +1,251 @@
-// backend/src/services/jupiter.service.ts
 import axios from "axios";
 import dotenv from "dotenv";
-import { VersionedTransaction } from "@solana/web3.js";
+import { Connection, Keypair, VersionedTransaction, } from "@solana/web3.js";
 import { getLogger } from "../utils/logger.js";
-import { signAndSendVersionedTx } from "./solana.service.js";
 dotenv.config();
 const log = getLogger("jupiter.service");
-// Base URLs
-const JUP_API_BASE = process.env.JUPITER_API_URL ||
-    process.env.NEXT_PUBLIC_JUPITER_ENDPOINT ||
-    "https://quote-api.jup.ag/v6";
-// Optional: private API key (swap/build)
-const JUP_API_KEY = process.env.JUPITER_API_KEY || "";
-/* -------------------------------------------------------------
-   1) Fetch Token List from Jupiter
-------------------------------------------------------------- */
-export async function fetchTokenPrices() {
-    try {
-        const url = "https://api.jup.ag/api/v1/tokens";
-        const { data } = await axios.get(url);
-        return data
-            .filter((t) => t.symbol && t.price)
-            .map((t) => ({
-            symbol: t.symbol,
-            mint: t.address,
-            price: Number(t.price),
-            pnl: Number((t.daily_price_change ?? 0).toFixed(2)),
-            liquidity: t.liquidity ?? null,
-            marketCap: t.market_cap ?? null,
-        }));
-    }
-    catch (err) {
-        log.error("❌ fetchTokenPrices failed:", err.message);
-        throw new Error("Unable to fetch token prices");
-    }
+/* ----------------------------- CONFIG ----------------------------- */
+const SOLANA_RPC = process.env.SOLANA_RPC_URL ||
+    process.env.NEXT_PUBLIC_SOLANA_ENDPOINT ||
+    "https://api.mainnet-beta.solana.com";
+if (!SOLANA_RPC.startsWith("http")) {
+    throw new Error("SOLANA_RPC_URL must start with http:// or https://");
 }
-/* -------------------------------------------------------------
-   2) Jupiter Quote Endpoint (v6)
-------------------------------------------------------------- */
-export async function getJupiterQuote(inputMint, outputMint, amount, slippage = 1) {
+const JUPITER_QUOTE_URL = process.env.JUPITER_QUOTE_URL ||
+    process.env.NEXT_PUBLIC_JUPITER_ENDPOINT ||
+    process.env.JUPITER_API_URL ||
+    "https://quote-api.jup.ag/v6";
+const JUPITER_SWAP_URL = process.env.JUPITER_SWAP_URL ||
+    process.env.JUPITER_SWAP_API_URL ||
+    process.env.JUPITER_API_KEY ||
+    process.env.JUPITER_SWAP ||
+    "https://jupiter-swap-api.quiknode.pro/";
+/* ----------------------------- CONNECTION ----------------------------- */
+const commitment = process.env.SOLANA_COMMITMENT || "confirmed";
+const connection = new Connection(SOLANA_RPC, commitment);
+/* ----------------------------- AXIOS INSTANCES ----------------------------- */
+const quoteClient = axios.create({
+    baseURL: JUPITER_QUOTE_URL,
+    timeout: 10_000,
+});
+const swapClient = axios.create({
+    baseURL: JUPITER_SWAP_URL,
+    timeout: 15_000,
+    headers: {
+        "Content-Type": "application/json",
+        ...(process.env.JUPITER_API_KEY
+            ? { "x-api-key": process.env.JUPITER_API_KEY }
+            : {}),
+    },
+});
+/* ----------------------------- HELPERS ----------------------------- */
+async function retry(fn, attempts = 2, delayMs = 300) {
+    let lastErr;
+    for (let i = 0; i <= attempts; i++) {
+        try {
+            return await fn();
+        }
+        catch (err) {
+            lastErr = err;
+            if (i < attempts)
+                await new Promise((r) => setTimeout(r, delayMs));
+        }
+    }
+    throw lastErr;
+}
+/** Normalizes quote responses from different Jupiter endpoints/versions */
+function parseQuoteResponse(raw) {
+    if (!raw)
+        return null;
+    // v6-like: {inAmount, outAmount, priceImpact, routePlan,...}
+    if (typeof raw.outAmount === "number" || typeof raw.outAmount === "string") {
+        return raw;
+    }
+    // some APIs wrap in data or quotes arrays
+    if (raw.data && Array.isArray(raw.data) && raw.data.length > 0)
+        return raw.data[0];
+    if (Array.isArray(raw) && raw.length > 0)
+        return raw[0];
+    if (raw.quoteResponse)
+        return raw.quoteResponse;
+    return raw;
+}
+/* ----------------------------- PUBLIC API ----------------------------- */
+/**
+ * Fetch best Jupiter quote for a swap.
+ * returns parsed quote or null on failure.
+ */
+export async function getJupiterQuote(inputMint, outputMint, amountLamports, slippagePercent = 1) {
     try {
-        const url = `${JUP_API_BASE}/quote`;
-        const res = await axios.get(url, {
+        const res = await retry(() => quoteClient.get("/quote", {
             params: {
                 inputMint,
                 outputMint,
-                amount,
-                slippageBps: slippage * 100,
-                onlyDirectRoutes: false,
-                allowCrossMint: true,
+                amount: amountLamports,
+                slippageBps: Math.round(slippagePercent * 100),
             },
-            timeout: 12000,
-        });
-        return res.data;
+        }));
+        const parsed = parseQuoteResponse(res.data || res.data?.data || res.data?.quote);
+        if (!parsed) {
+            log.warn({
+                inputMint,
+                outputMint,
+                amountLamports,
+            }, "Unable to parse Jupiter quote response");
+            return null;
+        }
+        // For convenience attach numeric outAmount / inAmount if strings
+        if (parsed.outAmount && typeof parsed.outAmount === "string") {
+            parsed.outAmount = Number(parsed.outAmount);
+        }
+        if (parsed.inAmount && typeof parsed.inAmount === "string") {
+            parsed.inAmount = Number(parsed.inAmount);
+        }
+        log.info({
+            inputMint,
+            outputMint,
+            in: parsed.inAmount ?? amountLamports,
+            out: parsed.outAmount ?? null,
+        }, "Jupiter quote fetched");
+        return parsed;
     }
     catch (err) {
-        log.error("❌ getJupiterQuote failed:", err.message);
+        log.error("getJupiterQuote failed", err?.message ?? err);
         return null;
     }
 }
-/* -------------------------------------------------------------
-   3) Build + Execute Jupiter Swap (v6)
-------------------------------------------------------------- */
+/**
+ * Request a swap transaction from Jupiter and execute it on-chain.
+ * - quoteResponse: the object returned from getJupiterQuote (optional)
+ * - userPublicKey: the wallet receiving the output tokens
+ *
+ * Returns { success, signature, raw } on success or { success: false, error } on failure.
+ */
 export async function executeJupiterSwap(opts) {
     try {
-        // 1️⃣ Use existing quote or fetch new one
-        const quote = opts.quoteResponse ||
-            (await getJupiterQuote(opts.inputMint, opts.outputMint, opts.amount, opts.slippage));
-        if (!quote) {
-            throw new Error("No quote from Jupiter.");
+        // server-side keypair (must be set as a JSON array in SECRET_KEY)
+        const secretRaw = process.env.SECRET_KEY || process.env.NEXT_PUBLIC_SECRET_KEY || "[]";
+        const secretArray = Array.isArray(secretRaw)
+            ? secretRaw
+            : JSON.parse(secretRaw);
+        if (!Array.isArray(secretArray) || secretArray.length === 0) {
+            throw new Error("SERVER SECRET_KEY is missing or invalid (required to sign).");
         }
-        // 2️⃣ Build SWAP transaction
-        const swapUrl = `${JUP_API_BASE}/swap`;
-        const headers = {};
-        if (JUP_API_KEY)
-            headers["x-api-key"] = JUP_API_KEY;
+        const signer = Keypair.fromSecretKey(Uint8Array.from(secretArray));
+        // ensure we have a quote (either provided or fetch)
+        const quoteResp = opts.quoteResponse ??
+            (await getJupiterQuote(opts.inputMint, opts.outputMint, opts.amount, opts.slippage ?? 1));
+        if (!quoteResp)
+            throw new Error("Missing Jupiter quote response (cannot build swap).");
+        // Prepare payload expected by Jupiter swap API
         const payload = {
-            quoteResponse: quote,
+            quoteResponse: quoteResp,
             userPublicKey: opts.userPublicKey,
             wrapAndUnwrapSol: true,
-            dynamicComputeUnitLimit: true,
-            prioritizationFeeLamports: 10000, // ~0.00001 SOL
+            // server-side-only optional flags
+            computeUnitPriceMicroLamports: undefined,
+            wrapUnwrapSOL: undefined,
+            // keep compatibility keys used by different Jupiter versions
+            wrapUnwrapSol: undefined,
         };
-        const { data } = await axios.post(swapUrl, payload, {
-            headers,
-            timeout: 15000,
-        });
-        if (!data?.swapTransaction) {
-            throw new Error("Swap endpoint returned no swapTransaction.");
+        // perform swap request to Jupiter swap endpoint
+        const res = await retry(() => swapClient.post("/swap", payload), 2, 400);
+        const raw = res.data ?? res;
+        // swapTransaction could be in data.swapTransaction OR data.swapTransactionBase64 OR raw.swapTransaction
+        const base64Tx = raw?.swapTransaction ||
+            raw?.swapTransactionBase64 ||
+            raw?.swap_transaction ||
+            raw?.swap_tx;
+        if (!base64Tx) {
+            // Some Jupiter compatible proxies return a transaction field inside raw.rawTransaction or similar
+            log.warn({ raw }, "Swap response did not include swapTransaction");
+            return {
+                success: false,
+                error: "No swap transaction returned by Jupiter.",
+            };
         }
-        // 3️⃣ Decode: base64 → VersionedTransaction
-        const tx = VersionedTransaction.deserialize(Buffer.from(data.swapTransaction, "base64"));
-        // 4️⃣ Server signs + sends to Solana
-        const signature = await signAndSendVersionedTx(tx);
-        return {
-            success: true,
-            signature,
-            inputAmount: Number(quote.inAmount),
-            outputAmount: Number(quote.outAmount),
-            priceImpact: quote.priceImpactPct,
-            data,
-        };
+        // Deserialize and sign VersionedTransaction (Jupiter returns base64 for v0)
+        const versioned = VersionedTransaction.deserialize(Buffer.from(base64Tx, "base64"));
+        // server signs any required keys (this depends on the swap structure)
+        versioned.sign([signer]);
+        // send transaction and wait for confirmation (use connection)
+        const signature = await connection.sendTransaction(versioned, {
+            skipPreflight: false,
+            preflightCommitment: "confirmed",
+        });
+        // confirm
+        await connection.confirmTransaction(signature, "confirmed");
+        log.info({ signature }, "Swap executed on-chain");
+        return { success: true, signature, raw };
     }
     catch (err) {
-        log.error("❌ executeJupiterSwap failed:", err.message);
-        return { success: false, error: err.message };
+        log.error("executeJupiterSwap failed", err?.message ?? err);
+        return { success: false, error: err?.message ?? String(err) };
     }
 }
+/* ----------------------------- OPTIONAL: token list / price helpers ----------------------------- */
+/**
+ * Fetch token list from jup ag token list (or fallback)
+ */
+export async function fetchTokenList() {
+    try {
+        // official jupiter token-list (raw GitHub JSON) often used by frontends
+        const url = "https://raw.githubusercontent.com/jup-ag/token-list/main/src/tokens/mainnet.json";
+        const res = await retry(() => axios.get(url), 2, 400);
+        return res.data;
+    }
+    catch (err) {
+        log.warn("fetchTokenList failed, returning null", err?.message ?? err);
+        return null;
+    }
+}
+/**
+ * Fetch simple prices for a list of mints using Jupiter price endpoint (price.jup.ag or your proxy).
+ * Accepts array of mint addresses (max depends on endpoint).
+ */
+export async function fetchPricesForMints(mints) {
+    try {
+        if (!mints || mints.length === 0)
+            return {};
+        // some Jupiter price endpoints accept comma-separated ids on /price?ids=
+        const url = (process.env.JUPITER_PRICE_URL || JUPITER_QUOTE_URL).replace(/\/$/, "") +
+            "/price";
+        const res = await retry(() => axios.get(url, { params: { ids: mints.join(",") }, timeout: 8000 }), 2, 300);
+        return res.data ?? {};
+    }
+    catch (err) {
+        log.warn("fetchPricesForMints failed", err?.message ?? err);
+        return {};
+    }
+}
+/**
+ * Fetch token prices merged with token metadata.
+ * Returns array of tokens with price, liquidity, marketCap, etc.
+ */
+export async function fetchTokenPrices() {
+    try {
+        const tokenList = await fetchTokenList();
+        if (!tokenList || !Array.isArray(tokenList.tokens)) {
+            log.warn("fetchTokenPrices: Invalid or empty tokenList");
+            return [];
+        }
+        const tokens = tokenList.tokens;
+        // fetch prices for mints in tokenList
+        const mints = tokens.map((t) => t.address);
+        const pricesMap = await fetchPricesForMints(mints);
+        // merge tokens with prices and return
+        const merged = tokens.map((t) => ({
+            ...t,
+            price: pricesMap[t.address] ?? null,
+            marketCap: t.extensions?.marketCap ?? null,
+            liquidity: t.extensions?.liquidity ?? null,
+        }));
+        return merged;
+    }
+    catch (err) {
+        log.warn("fetchTokenPrices failed", err?.message ?? err);
+        return [];
+    }
+}
+// Removed default export object for clearer named exports
 //# sourceMappingURL=jupiter.service.js.map

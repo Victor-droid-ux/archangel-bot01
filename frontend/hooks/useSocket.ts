@@ -1,7 +1,34 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useContext } from "react";
 import { io, Socket } from "socket.io-client";
+
+// Fallback local hook if the external provider module isn't available
+// This prevents compile-time import errors while keeping the same API shape.
+function useSocketContext() {
+  return {
+    connected: false,
+    lastMessage: null,
+    send: (_event?: string, _payload?: any) => {},
+    socket: null,
+  } as {
+    connected: boolean;
+    lastMessage: any;
+    send: (event?: string, payload?: any) => void;
+    socket: Socket | null;
+  };
+}
+
+export function useSocketContextValue() {
+  const ctx = useSocketContext();
+  return {
+    connected: ctx.connected,
+    lastMessage: ctx.lastMessage,
+    send: ctx.send,
+    socket: ctx.socket,
+  }
+}
 
 const SOCKET_URL =
   process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:4000";

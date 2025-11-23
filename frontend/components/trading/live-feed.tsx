@@ -104,6 +104,26 @@ export default function LiveFeed() {
       signature: payload?.signature ?? null,
     };
 
+    // Narrow the incoming type to the allowed union to satisfy TypeScript
+    const logType =
+      payload?.type === "buy" ||
+      payload?.type === "sell" ||
+      payload?.type === "info"
+        ? payload.type
+        : "info";
+
+    setLogs((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        time: now,
+        message: payload?.message ?? `${logType.toUpperCase()} executed`,
+        type: logType as "buy" | "sell" | "info",
+        pnl: typeof payload?.pnl === "number" ? payload.pnl : undefined,
+        amount: payload?.amount ?? undefined,
+        signature: payload?.signature ?? null,
+      },
+    ]);
     setLogs((prev) => [...prev, newLog].slice(-300));
 
     // Update dashboard live
@@ -114,7 +134,13 @@ export default function LiveFeed() {
         openTrades: stats.openTrades + (type === "buy" ? 1 : 0),
       });
     }
-  }, [lastMessage, updateStats, stats.openTrades, stats.totalProfit, stats.tradeVolume]);
+  }, [
+    lastMessage,
+    updateStats,
+    stats.openTrades,
+    stats.totalProfit,
+    stats.tradeVolume,
+  ]);
 
   /* -----------------------------------------
      OFFLINE FALLBACK BEHAVIOR

@@ -1,42 +1,45 @@
 import { getLogger } from "../utils/logger.js";
+import { getLatestTokens } from "../services/tokenPrice.service.js";
 const logger = getLogger("socket");
 export function registerSocketHandlers(io) {
     io.on("connection", (socket) => {
-        logger.info("Socket connected: " + socket.id);
-        // Send initial handshake
+        logger.info("⚡ Socket connected: " + socket.id);
+        // Send current token prices immediately on connect (best-effort)
+        try {
+            const snapshot = getLatestTokens();
+            socket.emit("token_prices", { tokens: snapshot });
+        }
+        catch (err) {
+            logger.warn({ err: err?.message }, "Could not load token snapshot on connect");
+        }
+        // Initial handshake
         socket.emit("update", {
             event: "connection",
             payload: { status: "connected" },
         });
-        // -----------------------------
-        // Client -> Server trade logs
-        // -----------------------------
+        // Receive logs from client
         socket.on("tradeLog", (payload) => {
-            logger.info("Received tradeLog from client");
-            const data = {
+            io.emit("update", {
                 event: "tradeLog",
                 payload,
                 timestamp: new Date().toISOString(),
-            };
-            // broadcast to all clients
-            io.emit("update", data);
+            });
         });
-        // -----------------------------
-        // Admin/server can emit trade:update
-        // -----------------------------
+        // Admin/backend triggers
         socket.on("trade:update", (payload) => {
-            logger.warn("Received trade:update; broadcasting");
             io.emit("update", { event: "trade:update", payload });
         });
-        // -----------------------------
-        // Token feed: backend emits live token updates
-        // -----------------------------
+        // Token discovery ISR realtime updates
         socket.on("tokenFeed", (payload) => {
-            logger.info("Received tokenFeed from backend");
+            logger.info("🔄 Broadcasting tokenFeed");
             io.emit("tokenFeed", payload);
         });
+        // Price updates (backend streaming)
+        socket.on("priceUpdate", (payload) => {
+            io.emit("priceUpdate", payload);
+        });
         socket.on("disconnect", (reason) => {
-            logger.warn(`Socket disconnected: ${socket.id} (${reason})`);
+            logger.warn(`❌ Socket disconnected: ${socket.id} (${reason})`);
         });
         socket.on("error", (err) => {
             logger.error("Socket error: " + (err?.message ?? String(err)));

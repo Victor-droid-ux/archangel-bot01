@@ -75,8 +75,16 @@ export const useStats = () => {
   /* ----------------------------------------------------
       2. Manual stats updater
   ---------------------------------------------------- */
-  const updateStats = useCallback((updates: Partial<DashboardStats>) => {
-    setStats((prev) => ({ ...prev, ...updates }));
+  type StatsUpdater =
+    | Partial<DashboardStats>
+    | ((prev: DashboardStats) => Partial<DashboardStats>);
+
+  const updateStats = useCallback((updates: StatsUpdater) => {
+    if (typeof updates === "function") {
+      setStats((prev) => ({ ...prev, ...updates(prev) }));
+    } else {
+      setStats((prev) => ({ ...prev, ...updates }));
+    }
   }, []);
 
   /* ----------------------------------------------------

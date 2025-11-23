@@ -3,6 +3,7 @@ import Navbar from "@components/layout/navbar";
 import Footer from "@components/layout/footer";
 import { Toaster } from "react-hot-toast";
 import type { Metadata, Viewport } from "next";
+import { SocketProvider } from "./providers/SocketProvider";
 
 export const metadata: Metadata = {
   title: "ArchAngel Bot – Solana Trading Dashboard",
@@ -60,7 +61,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* ✅ Progressive Web App meta tags */}
+        {/* Progressive Web App meta tags */}
         <meta name="application-name" content="ArchAngel Bot" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta
@@ -70,25 +71,23 @@ export default function RootLayout({
       </head>
 
       <body className="min-h-screen flex flex-col bg-base-100 text-base-content transition-colors duration-300">
-        {/* Navbar */}
-        <Navbar />
+        <SocketProvider>
+          <Navbar />
 
-        {/* Main content area */}
-        <main className="flex-grow container mx-auto px-4 py-8">
-          {children}
-        </main>
+          <main className="flex-grow container mx-auto px-4 py-8">
+            {children}
+          </main>
 
-        {/* Footer */}
-        <Footer />
+          <Footer />
 
-        {/* Toast notifications */}
-        <Toaster
-          position="bottom-right"
-          toastOptions={{
-            className: "bg-neutral text-neutral-content rounded-lg shadow-md",
-            duration: 3000,
-          }}
-        />
+          <Toaster
+            position="bottom-right"
+            toastOptions={{
+              className: "bg-neutral text-neutral-content rounded-lg shadow-md",
+              duration: 3000,
+            }}
+          />
+        </SocketProvider>
       </body>
     </html>
   );

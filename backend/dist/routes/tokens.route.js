@@ -1,7 +1,7 @@
 // backend/src/routes/tokens.route.ts
 import express from "express";
 import logger from "../utils/logger.js";
-import { fetchTokenPrices } from "../services/jupiter.service.js"; // 🟢 Jupiter price fetcher
+import { fetchTokenPrices } from "../services/jupiter.service.js";
 const router = express.Router();
 /**
  * GET /api/tokens

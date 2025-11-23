@@ -17,6 +17,13 @@ import { useStats } from "@hooks/useStats";
 import { useWallet } from "@hooks/useWallet";
 import { useTradingConfigStore } from "@hooks/useConfig";
 import toast from "react-hot-toast";
+import { DashboardStats } from "@hooks/useStats";
+import TokenDiscovery from "@components/trading/TokenDiscovery";
+import PriceChart from "@components/trading/PriceChart";
+import LiveTrades from "@components/trading/LiveTrades";
+import PositionsPanel from "@components/trading/PositionsPanel";
+
+
 
 export default function TradingPage() {
   const { connected, publicKey } = useWallet();

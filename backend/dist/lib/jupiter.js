@@ -5,15 +5,15 @@ dotenv.config();
 /* ----------------------------- 🔗 CONFIGURATION ----------------------------- */
 const SOLANA_RPC = process.env.SOLANA_RPC_URL ||
     process.env.NEXT_PUBLIC_SOLANA_ENDPOINT ||
-    "https://api.mainnet-beta.solana.com";
+    "https://autumn-radial-owl.solana-mainnet.quiknode.pro/a3bcc32583d07f570c3b333ceda3c3ed10ff135f/";
 if (!SOLANA_RPC.startsWith("http")) {
     throw new Error("SOLANA_RPC_URL must start with http:// or https://");
 }
 const JUPITER_QUOTE = process.env.JUPITER_API_URL ||
     process.env.NEXT_PUBLIC_JUPITER_ENDPOINT ||
-    "https://quote-api.jup.ag/v6";
+    "https://jupiter-quote-api.quiknode.pro/a3bcc32583d07f570c3b333ceda3c3ed10ff135f/";
 const JUPITER_SWAP = process.env.JUPITER_API_KEY ||
-    "https://jupiter-swap-api.quiknode.pro/CADF26E6D324/";
+    "https://jupiter-swap-api.quiknode.pro/a3bcc32583d07f570c3b333ceda3c3ed10ff135f/";
 const connection = new Connection(SOLANA_RPC, "confirmed");
 /* ------------------------------ 📊 GET QUOTE ------------------------------ */
 /**

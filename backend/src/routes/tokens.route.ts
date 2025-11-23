@@ -1,8 +1,7 @@
 // backend/src/routes/tokens.route.ts
 import express from "express";
 import logger from "../utils/logger.js";
-import { fetchTokenPrices } from "../services/jupiter.service.js"; // 🟢 Jupiter price fetcher
-import { getLatestTokens } from "../services/tokenPrice.service.js";
+import { fetchTokenPrices } from "../services/jupiter.service.js";
 
 const router = express.Router();
 
@@ -26,31 +25,6 @@ router.get("/", async (_req, res) => {
     });
   } catch (err: any) {
     logger.error("❌ Failed to load tokens:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to load token list.",
-    });
-  }
-});
-
-/**
- * GET /api/tokens
- * Returns live token list snapshot with:
- *  - symbol
- *  - mint address
- *  - current price
- *  - optional pnl/liquidity/marketCap (null for now)
- */
-router.get("/", async (_req, res) => {
-  try {
-    const tokens = getLatestTokens();
-
-    return res.json({
-      success: true,
-      tokens,
-    });
-  } catch (err: any) {
-    logger.error(`❌ Failed to load tokens: ${err.message}`);
     return res.status(500).json({
       success: false,
       message: "Failed to load token list.",

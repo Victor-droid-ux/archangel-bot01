@@ -1,0 +1,93 @@
+* Fetch simple prices for a list of mints using Jupiter price endpoint (price.jup.ag or your proxy).
+ * Accepts array of mint addresses (max depends on endpoint).
+ */
+export async function fetchPricesForMints(mints: string[]) {
+  try {
+    if (!mints || mints.length === 0) return {};
+    // some Jupiter price endpoints accept comma-separated ids on /price?ids=
+    const url =
+      (process.env.JUPITER_PRICE_URL || JUPITER_QUOTE_URL).replace(/\/$/, "") +
+      "/price";
+    const res = await retry(
+      () => axios.get(url, { params: { ids: mints.join(",") }, timeout: 8000 }),
+      2,
+      300
+    );
+    return res.data ?? {};
+  } catch (err: any) {
+    log.warn("fetchPricesForMints failed", err?.message ?? err);
+    return {};
+  }
+}
+
+/* ----------------------------- EXPORTS ----------------------------- */
+export default {
+  getJupiterQuote,
+  executeJupiterSwap,
+  fetchTokenList,
+  fetchPricesForMints,
+};
+=======
+/**
+ * Fetch simple prices for a list of mints using Jupiter price endpoint (price.jup.ag or your proxy).
+ * Accepts array of mint addresses (max depends on endpoint).
+ */
+export async function fetchPricesForMints(mints: string[]) {
+  try {
+    if (!mints || mints.length === 0) return {};
+    // some Jupiter price endpoints accept comma-separated ids on /price?ids=
+    const url =
+      (process.env.JUPITER_PRICE_URL || JUPITER_QUOTE_URL).replace(/\/$/, "") +
+      "/price";
+    const res = await retry(
+      () => axios.get(url, { params: { ids: mints.join(",") }, timeout: 8000 }),
+      2,
+      300
+    );
+    return res.data ?? {};
+  } catch (err: any) {
+    log.warn("fetchPricesForMints failed", err?.message ?? err);
+    return {};
+  }
+}
+
+/**
+ * Fetch token prices merged with token metadata.
+ * Returns array of tokens with price, liquidity, marketCap, etc.
+ */
+export async function fetchTokenPrices() {
+  try {
+    const tokenList = await fetchTokenList();
+    if (!tokenList || !Array.isArray(tokenList.tokens)) {
+      log.warn("fetchTokenPrices: Invalid or empty tokenList");
+      return [];
+    }
+    const tokens = tokenList.tokens;
+
+    // fetch prices for mints in tokenList
+    const mints = tokens.map((t: any) => t.address);
+    const pricesMap = await fetchPricesForMints(mints);
+
+    // merge tokens with prices and return
+    const merged = tokens.map((t: any) => ({
+      ...t,
+      price: pricesMap[t.address] ?? null,
+      marketCap: t.extensions?.marketCap ?? null,
+      liquidity: t.extensions?.liquidity ?? null,
+    }));
+
+    return merged;
+  } catch (err: any) {
+    log.warn("fetchTokenPrices failed", err?.message ?? err);
+    return [];
+  }
+}
+
+/* ----------------------------- EXPORTS ----------------------------- */
+export default {
+  getJupiterQuote,
+  executeJupiterSwap,
+  fetchTokenList,
+  fetchPricesForMints,
+  fetchTokenPrices,
+};
