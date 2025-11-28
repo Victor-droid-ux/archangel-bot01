@@ -1,76 +1,70 @@
+// frontend/app/trading/stats-panel.tsx
 "use client";
 
 import React from "react";
-import useSWR from "swr";
 import { Card, CardHeader, CardTitle, CardContent } from "@components/ui/card";
-import { fetcher, formatNumber } from "@lib/utils";
-import { TrendingUp, TrendingDown, Activity, Wallet } from "lucide-react";
+import { TrendingUp, Wallet, Activity } from "lucide-react";
+import { useStats } from "@hooks/useStats";
+import { formatNumber } from "@lib/utils";
 
 export default function StatsPanel() {
-  const { data, error, isLoading } = useSWR("/api/stats", fetcher, {
-    refreshInterval: 6000, // refresh every 6 seconds
-  });
+  const { stats, loading } = useStats();
 
-  if (error)
+  if (loading) {
     return (
-      <Card className="bg-base-200 p-4 text-red-400 text-center">
-        Failed to load stats
+      <Card className="bg-base-200 p-4 text-center text-gray-400">
+        Loading stats…
       </Card>
     );
+  }
 
-  if (isLoading)
-    return (
-      <Card className="bg-base-200 p-4 text-gray-400 text-center">
-        Loading stats...
-      </Card>
-    );
-
-  const { pnl, totalTrades, winRate, balance } = data || {
-    pnl: 0,
-    totalTrades: 0,
-    winRate: 0,
-    balance: 0,
-  };
-
-  const pnlColor = pnl >= 0 ? "text-green-400" : "text-red-400";
-  const pnlIcon =
-    pnl >= 0 ? <TrendingUp size={20} /> : <TrendingDown size={20} />;
+  const pnlPositive = stats.totalProfitSol >= 0;
 
   return (
     <Card className="bg-base-200 rounded-xl p-4 shadow">
       <CardHeader>
-        <CardTitle className="text-lg font-semibold text-primary">
-          Trading Stats
+        <CardTitle className="text-lg font-semibold flex items-center gap-2">
+          <Activity size={18} /> Trading Stats
         </CardTitle>
       </CardHeader>
 
-      <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-        <div className="flex flex-col items-center">
-          <div className={`flex items-center gap-2 ${pnlColor}`}>
-            {pnlIcon}
-            <span className="text-lg font-semibold">{pnl}%</span>
+      <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center text-sm">
+        {/* TOTAL PROFIT */}
+        <div>
+          <p className="opacity-60 text-xs">Total Profit</p>
+          <div
+            className={`font-bold ${
+              pnlPositive ? "text-green-400" : "text-red-400"
+            }`}
+          >
+            {pnlPositive ? "+" : ""}
+            {stats.totalProfitSol.toFixed(4)} SOL
+            <span className="text-xs opacity-70 ml-1">
+              ({pnlPositive ? "+" : ""}
+              {stats.totalProfitPercent.toFixed(2)}%)
+            </span>
           </div>
-          <p className="text-sm opacity-70">PnL</p>
         </div>
 
-        <div className="flex flex-col items-center">
-          <Activity className="text-blue-400" size={20} />
-          <span className="text-lg font-semibold">{totalTrades}</span>
-          <p className="text-sm opacity-70">Total Trades</p>
+        {/* OPEN TRADES */}
+        <div>
+          <p className="opacity-60 text-xs">Open Trades</p>
+          <span className="font-bold text-yellow-300">{stats.openTrades}</span>
         </div>
 
-        <div className="flex flex-col items-center">
-          <TrendingUp className="text-yellow-400" size={20} />
-          <span className="text-lg font-semibold">{winRate}%</span>
-          <p className="text-sm opacity-70">Win Rate</p>
+        {/* WIN RATE */}
+        <div>
+          <p className="opacity-60 text-xs">Win Rate</p>
+          <span className="font-bold">{stats.winRate.toFixed(1)}%</span>
         </div>
 
-        <div className="flex flex-col items-center">
-          <Wallet className="text-purple-400" size={20} />
-          <span className="text-lg font-semibold">
-            {formatNumber(balance)} SOL
+        {/* PORTFOLIO VALUE */}
+        <div>
+          <p className="opacity-60 text-xs">Portfolio Value</p>
+          <span className="font-bold flex items-center gap-1 justify-center">
+            <Wallet size={14} className="opacity-70" />
+            {formatNumber(stats.portfolioValue, 4)} SOL
           </span>
-          <p className="text-sm opacity-70">Balance</p>
         </div>
       </CardContent>
     </Card>

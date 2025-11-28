@@ -2,25 +2,42 @@ import { Router } from "express";
 import dbService from "../services/db.service.js";
 import axios from "axios";
 const router = Router();
+const TOKENLIST_URL = process.env.JUPITER_TOKENLIST_URL || "https://tokens.jup.ag/tokens"; // fallback official
 router.get("/", async (_, res) => {
     try {
         const positions = await dbService.getPositions();
-        // fetch token prices from Jupiter
-        const { data } = await axios.get("https://jupiter-quote-api.quiknode.pro/a3bcc32583d07f570c3b333ceda3c3ed10ff135f/");
+        if (!positions.length) {
+            return res.json({ success: true, positions: [] });
+        }
+        // Fetch Jupiter token list once per request
+        const { data: tokens } = await axios.get(TOKENLIST_URL);
         const enriched = positions.map((p) => {
-            const match = data.find((x) => x.symbol === p.token || x.address === p.token);
-            const price = match ? Number(match.price) : 0;
+            const match = tokens.find((t) => t.address === p.token || t.symbol?.toUpperCase() === p.token);
+            const price = Number(match?.price ?? 0);
+            const currentValue = price * p.netSol;
+            const buyValue = (p.avgBuyPrice || 0) * p.netSol;
+            const unrealizedPnlSol = p.avgBuyPrice && price ? currentValue - buyValue : 0;
+            const unrealizedPnlPct = p.avgBuyPrice && price ? (price - p.avgBuyPrice) / p.avgBuyPrice : 0;
             return {
                 ...p,
+                name: match?.name ?? p.token,
+                mint: match?.address ?? p.token,
                 currentPrice: price,
-                unrealizedPnlSol: p.avgBuyPrice && price ? (price - p.avgBuyPrice) * p.netSol : 0,
-                unrealizedPnlPct: p.avgBuyPrice && price ? (price - p.avgBuyPrice) / p.avgBuyPrice : 0,
+                unrealizedPnlSol,
+                unrealizedPnlPct,
             };
         });
-        return res.json({ success: true, positions: enriched });
+        res.json({
+            success: true,
+            positions: enriched,
+        });
     }
     catch (err) {
-        return res.status(500).json({ success: false, message: err.message });
+        console.error("Positions API error:", err);
+        res.status(500).json({
+            success: false,
+            message: err.message || "Failed fetching positions",
+        });
     }
 });
 export default router;

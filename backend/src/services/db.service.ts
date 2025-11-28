@@ -94,9 +94,9 @@ async function addTrade(input: {
   token: string;
   inputMint?: string;
   outputMint?: string;
-  amount: number; // lamports
+  amountLamports: number;
   price?: number;
-  pnl?: number; // percent (0.02) OR (2 => %)
+  pnl?: number;
   wallet?: string;
   simulated?: boolean;
   signature?: string | null;
@@ -107,10 +107,9 @@ async function addTrade(input: {
   try {
     const timestamp = input.timestamp ? new Date(input.timestamp) : new Date();
 
-    const amountLamports = Number(input.amount);
+    const amountLamports = Number(input.amountLamports);
     const amountSol = amountLamports / 1e9;
 
-    // Normalize pnl %
     let pnlPercent = 0;
     if (typeof input.pnl === "number") {
       pnlPercent = Math.abs(input.pnl) <= 1 ? input.pnl : input.pnl / 100;
@@ -132,15 +131,12 @@ async function addTrade(input: {
       ...(pnlSol !== 0 && { pnlSol }),
       ...(input.wallet !== undefined && { wallet: input.wallet }),
       ...(input.simulated !== undefined && { simulated: input.simulated }),
-      ...(input.signature !== null && { signature: input.signature }),
+      ...(input.signature !== undefined && { signature: input.signature }),
     };
 
-    // Insert trade
     await tradesCol!.insertOne(record);
 
-    // Update stats: atomic
-    const deltaOpen = input.type === "buy" ? 1 : input.type === "sell" ? -1 : 0;
-
+    const deltaOpen = input.type === "buy" ? 1 : -1;
     const updatedStats = await statsCol!.findOneAndUpdate(
       {},
       {
@@ -154,42 +150,26 @@ async function addTrade(input: {
       { returnDocument: "after" }
     );
 
-    if (!updatedStats) throw new Error("Failed to update stats");
+    if (!updatedStats) throw new Error("Failed updating stats");
 
     const s = updatedStats;
-    const recent = await tradesCol!
-      .find({ pnl: { $exists: true } })
-      .sort({ timestamp: -1 })
-      .limit(500)
-      .toArray();
-
-    const wins = recent.filter((t) => (t.pnl ?? 0) > 0).length;
-    const winRate = recent.length ? (wins / recent.length) * 100 : 0;
-
     const totalProfitPercent =
-      s.tradeVolumeSol > 0 ? s.totalProfitSol / s.tradeVolumeSol : 0;
+      s.tradeVolumeSol > 0 ? (s.totalProfitSol / s.tradeVolumeSol) * 100 : 0;
 
-    // Final stats update
     await statsCol!.updateOne(
       {},
       {
         $set: {
-          winRate,
           totalProfitPercent,
           portfolioValue: (s.portfolioValue ?? 0) + pnlSol,
         },
       }
     );
 
-    log.info(
-      `Trade stored & stats updated: ${record.type.toUpperCase()} ${
-        record.token
-      }`
-    );
-
+    log.info(`Trade stored: ${record.type.toUpperCase()} ${record.token}`);
     return record;
   } catch (err: any) {
-    log.error("❌ addTrade failed:", err.message);
+    log.error("addTrade failed:", err.message);
     throw err;
   }
 }
@@ -209,7 +189,9 @@ async function getStats() {
   return stats;
 }
 
-async function getPositions() {
+async function getPositions(): Promise<
+  Array<{ token: string; netSol: number; avgBuyPrice?: number }>
+> {
   if (!db) await connect();
 
   const agg = await tradesCol!
@@ -239,7 +221,7 @@ async function getPositions() {
     ])
     .toArray();
 
-  return agg;
+  return agg as Array<{ token: string; netSol: number; avgBuyPrice?: number }>;
 }
 
 async function updateStats(updates: Partial<StatsDoc>) {

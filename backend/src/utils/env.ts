@@ -1,67 +1,69 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-// ✅ Helper: required backend-only env keys
-const requireEnv = (key: string): string => {
-  const value = process.env[key];
-  if (!value) throw new Error(`❌ Missing required env variable: ${key}`);
-  return value;
+/** Helper to enforce required env only when needed */
+const required = (key: string): string => {
+  const v = process.env[key];
+  if (!v?.length) throw new Error(`❌ Missing env var: ${key}`);
+  return v;
 };
 
 export const ENV = {
   PORT: process.env.PORT || "4000",
 
-  // Solana RPC & WebSocket endpoints
-  SOLANA_RPC_URL: requireEnv("SOLANA_RPC_URL"),
-  NEXT_PUBLIC_SOLANA_ENDPOINT: process.env.NEXT_PUBLIC_SOLANA_ENDPOINT || "",
-
+  /** RPC */
+  SOLANA_RPC_URL: required("SOLANA_RPC_URL"),
   SOLANA_WS_URL: process.env.SOLANA_WS_URL || "",
 
-  // Jupiter API endpoints
-  JUPITER_QUOTE_URL: requireEnv("JUPITER_QUOTE_URL"),
-  NEXT_PUBLIC_JUPITER_ENDPOINT: process.env.NEXT_PUBLIC_JUPITER_ENDPOINT || "",
-  JUPITER_SWAP_URL: requireEnv("JUPITER_SWAP_URL"),
+  /** Jupiter API */
+  JUPITER_QUOTE_URL: required("JUPITER_QUOTE_URL"),
+  JUPITER_SWAP_URL: required("JUPITER_SWAP_URL"),
 
-  // Server secret key
-  SECRET_KEY: requireEnv("SECRET_KEY"),
-  NEXT_PUBLIC_SECRET_KEY: process.env.NEXT_PUBLIC_SECRET_KEY || "",
-
-  // Feature flags
+  /** Wallet + signing */
   USE_REAL_SWAP: process.env.USE_REAL_SWAP === "true",
 
-  // Frontend CORS URL
-  FRONTEND_URL: process.env.FRONTEND_URL || "http://localhost:3000",
+  /** SECRET_KEY only required for real swaps */
+  SECRET_KEY:
+    process.env.SECRET_KEY && process.env.SECRET_KEY.trim().length > 0
+      ? process.env.SECRET_KEY
+      : undefined,
 
-  // Default trading / monitor settings
-  ENABLE_AUTO_BUY: process.env.ENABLE_AUTO_BUY === "true",
+  /** Server Public Wallet */
+  SERVER_PUBLIC_KEY: process.env.SERVER_PUBLIC_KEY || "",
 
+  /** Safety checks */
+  ensureKeys() {
+    if (ENV.USE_REAL_SWAP) {
+      if (!ENV.SECRET_KEY)
+        throw new Error("❌ USE_REAL_SWAP=true but SECRET_KEY is missing");
+      if (!ENV.SERVER_PUBLIC_KEY)
+        throw new Error("❌ SERVER_PUBLIC_KEY is required for real swaps");
+    }
+  },
+
+  /** Trading config */
   AUTO_BUY_AMOUNT_SOL: Number(process.env.AUTO_BUY_AMOUNT_SOL ?? 0.1),
-
-  DEFAULT_SLIPPAGE: Number(process.env.DEFAULT_SLIPPAGE ?? 1),
-
-  TOKEN_WATCH_INTERVAL_MS: Number(
-    process.env.TOKEN_WATCH_INTERVAL_MS ?? 10_000
-  ),
-
-  MIN_TOKEN_MARKETCAP_USD: Number(
-    process.env.MIN_TOKEN_MARKETCAP_USD ?? 300000
-  ),
-
-  MIN_TOKEN_LIQUIDITY_USD: Number(process.env.MIN_TOKEN_LIQUIDITY_USD ?? 5000),
+  DEFAULT_SLIPPAGE_PCT: Number(process.env.DEFAULT_SLIPPAGE_PCT ?? 1),
+  ENABLE_AUTO_BUY: process.env.ENABLE_AUTO_BUY === "true",
+  TOKEN_WATCH_INTERVAL_MS: Number(process.env.TOKEN_WATCH_INTERVAL_MS ?? 10000),
 
   POSITION_MONITOR_INTERVAL_MS: Number(
     process.env.POSITION_MONITOR_INTERVAL_MS ?? 5000
   ),
+  DEFAULT_TAKE_PROFIT_PCT: Number(process.env.DEFAULT_TAKE_PROFIT_PCT ?? 0.1),
+  DEFAULT_STOP_LOSS_PCT: Number(process.env.DEFAULT_STOP_LOSS_PCT ?? 0.05),
 
-  DEFAULT_TAKE_PROFIT_PCT: Number(process.env.DEFAULT_TAKE_PROFIT_PCT ?? 0.1), // 10%
+  /** Token filtering */
+  MIN_TOKEN_MARKETCAP_USD: Number(
+    process.env.MIN_TOKEN_MARKETCAP_USD ?? 300000
+  ),
+  MIN_TOKEN_LIQUIDITY_USD: Number(process.env.MIN_TOKEN_LIQUIDITY_USD ?? 5000),
 
-  DEFAULT_STOP_LOSS_PCT: Number(process.env.DEFAULT_STOP_LOSS_PCT ?? 0.05), // 5%
-
-  // server's public key (optional)
-  SERVER_PUBLIC_KEY: process.env.SERVER_PUBLIC_KEY ?? undefined,
-
-  // Server wallet keys / overrides
-  DEFAULT_SERVER_WALLET: process.env.DEFAULT_SERVER_WALLET ?? "",
+  /** Frontend CORS */
+  FRONTEND_URL: process.env.FRONTEND_URL || "http://localhost:3000",
 };
 
-export { requireEnv };
+// 🚀 Run validation now so backend fails early if required keys missing
+ENV.ensureKeys();
+
+export { required as requireEnv };

@@ -1,8 +1,9 @@
 // backend/src/routes/tokens.route.ts
 import express from "express";
-import logger from "../utils/logger.js";
+import { getLogger } from "../utils/logger.js";
 import { fetchTokenPrices } from "../services/jupiter.service.js";
 const router = express.Router();
+const logger = getLogger("tokens.route");
 /**
  * GET /api/tokens
  * Returns REAL token list with:
@@ -15,7 +16,7 @@ const router = express.Router();
  */
 router.get("/", async (_req, res) => {
     try {
-        const tokens = await fetchTokenPrices(); // ⬅ REAL data, no mock
+        const tokens = await fetchTokenPrices(); // ⬅ REAL price data
         return res.json({
             success: true,
             tokens,

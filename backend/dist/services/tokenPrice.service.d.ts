@@ -13,12 +13,6 @@ export type TokenWithPrice = JupiterToken & {
     liquidity: number | null;
     marketCap: number | null;
 };
-/**
- * Initialize the token price service
- */
 export declare function initTokenPriceService(io: SocketIOServer): Promise<void>;
-/**
- * Public getter for latest data
- */
 export declare function getLatestTokens(): TokenWithPrice[];
 //# sourceMappingURL=tokenPrice.service.d.ts.map

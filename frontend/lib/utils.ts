@@ -1,42 +1,83 @@
-// frontend/lib/utils.ts
-
 /**
- * 🧠 Unified fetcher utility for backend & external APIs
- * - Auto-prefixes backend routes with NEXT_PUBLIC_BACKEND_URL
- * - Automatically throws if response is not OK
+ * ==========================================================
+ *  🧠 Unified Fetcher Utility
+ * ==========================================================
  */
-export const fetcher = async (url: string, options: RequestInit = {}) => {
-  const base = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:4000";
-  const finalUrl = url.startsWith("http") ? url : `${base}${url}`;
+export const fetcher = async <T = any>(
+  url: string,
+  options: RequestInit = {}
+): Promise<T> => {
+  const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:4000";
 
-  const res = await fetch(finalUrl, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
+  const finalUrl = url.startsWith("http") ? url : `${BASE}${url}`;
 
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`Fetch failed: ${res.status} — ${errorText}`);
+  // Timeout protection
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+
+  let res: Response;
+
+  try {
+    res = await fetch(finalUrl, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+    });
+  } catch (err: any) {
+    clearTimeout(timeout);
+
+    if (err?.name === "AbortError") {
+      throw new Error(`⏳ Request timed out: ${finalUrl}`);
+    }
+
+    throw new Error(`🌐 Network error: ${err?.message || "Unknown error"}`);
   }
 
-  return res.json();
+  clearTimeout(timeout);
+
+  let json: any = null;
+  try {
+    json = await res.json();
+  } catch {
+    throw new Error(`❌ Invalid JSON response from ${finalUrl}`);
+  }
+
+  if (!res.ok || json?.success === false) {
+    throw new Error(
+      json?.message ||
+        `❌ Request failure: HTTP ${res.status} — ${res.statusText}`
+    );
+  }
+
+  return json as T;
 };
 
 /**
- * 🧩 Tailwind className combiner
+ * 📌 POST helper
+ */
+export const post = async <T = any>(url: string, body: any): Promise<T> =>
+  fetcher<T>(url, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+/**
+ * 🧩 Tailwind class combiner
  */
 export function cn(...classes: (string | undefined | null | false)[]) {
   return classes.filter(Boolean).join(" ");
 }
 
 /**
- * 💰 Format large numbers (balances, token prices, etc.)
+ * 💰 Format numbers nicely
  */
-export const formatNumber = (num: number) =>
-  Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(num);
+export const formatNumber = (num: number, decimals = 2) =>
+  Intl.NumberFormat("en-US", {
+    maximumFractionDigits: decimals,
+  }).format(num);
 
 /**
  * 🔗 Shorten Solana addresses
@@ -45,7 +86,9 @@ export const truncateAddress = (address: string) =>
   address ? `${address.slice(0, 4)}...${address.slice(-4)}` : "";
 
 /**
- * ⏰ Format timestamps in HH:mm:ss (24h)
+ * ⏰ Format timestamps
  */
-export const formatTime = (date: Date) =>
-  date.toLocaleTimeString("en-US", { hour12: false });
+export const formatTime = (date: Date | string) => {
+  const d = typeof date === "string" ? new Date(date) : date;
+  return d.toLocaleTimeString("en-US", { hour12: false });
+};

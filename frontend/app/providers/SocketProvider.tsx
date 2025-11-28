@@ -9,6 +9,7 @@ import React, {
   useState,
 } from "react";
 import { io, Socket } from "socket.io-client";
+import { socket } from "../../lib/socket";
 
 interface SocketData {
   event: string;

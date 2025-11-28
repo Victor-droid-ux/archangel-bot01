@@ -17,25 +17,26 @@ import { useStats } from "@hooks/useStats";
 import { useWallet } from "@hooks/useWallet";
 import { useTradingConfigStore } from "@hooks/useConfig";
 import toast from "react-hot-toast";
-import { DashboardStats } from "@hooks/useStats";
 import TokenDiscovery from "@components/trading/TokenDiscovery";
 import PriceChart from "@components/trading/PriceChart";
 import LiveTrades from "@components/trading/LiveTrades";
 import PositionsPanel from "@components/trading/PositionsPanel";
-
-
+import { useStatsSync } from "@hooks/useStatsSync";
 
 export default function TradingPage() {
-  const { connected, publicKey } = useWallet();
+  // Auto-sync stats from backend
+  useStatsSync();
+
+  const { connected } = useWallet();
   const { executeTrade, loading } = useTrade();
   const { connected: socketConnected, lastMessage } = useSocket();
-  const { stats, updateStats } = useStats();
+  const { stats } = useStats();
   const { selectedToken } = useTradingConfigStore();
 
   const [autoTrading, setAutoTrading] = useState(false);
   const [tradeHistory, setTradeHistory] = useState<any[]>([]);
 
-  // ⚡ Handle auto trading
+  // ⚡ Simulated auto-trading
   useEffect(() => {
     if (!autoTrading) return;
 
@@ -47,32 +48,24 @@ export default function TradingPage() {
     return () => clearInterval(interval);
   }, [autoTrading, executeTrade, selectedToken]);
 
-  // 📡 Listen for new tradeFeed socket events
+  // 📡 Listen for trade feed socket messages
   useEffect(() => {
-    if (lastMessage && lastMessage.event === "tradeFeed") {
-      const trade = lastMessage.payload;
-      setTradeHistory((prev) => [trade, ...prev.slice(0, 19)]); // keep recent 20
+    if (lastMessage?.event !== "tradeFeed") return;
 
-      // update live pnl using functional updater to avoid stale deps
-      const profitDelta =
-        trade.type === "sell" ? Math.random() * 10 : -(Math.random() * 3);
-      updateStats((prev) => ({
-        totalProfit: prev.totalProfit + profitDelta,
-        tradeVolume: prev.tradeVolume + trade.amount,
-      }));
+    const trade = lastMessage.payload;
+    setTradeHistory((prev) => [trade, ...prev.slice(0, 19)]);
 
-      toast.success(
-        `${
-          trade.simulated ? "🧪 Simulated" : "✅ Live"
-        } ${trade.type.toUpperCase()} ${trade.amount} ${trade.token}`,
-        { duration: 3000 }
-      );
-    }
-  }, [lastMessage, updateStats]);
+    toast.success(
+      `${trade.type.toUpperCase()} ${trade.amount} ${
+        trade.token
+      } trade received!`,
+      { duration: 3000 }
+    );
+  }, [lastMessage]);
 
   const handleTrade = async (type: "buy" | "sell") => {
     if (!connected) {
-      toast.error("Please connect your wallet first.");
+      toast.error("Please connect your wallet first!");
       return;
     }
     await executeTrade(type, selectedToken || "BONK");
@@ -80,13 +73,13 @@ export default function TradingPage() {
 
   const toggleAutoTrade = () => {
     if (!connected) {
-      toast.error("Connect your wallet before enabling auto trade.");
+      toast.error("Connect wallet before enabling auto-trade.");
       return;
     }
-
     setAutoTrading((prev) => !prev);
+
     toast.success(
-      !autoTrading ? "🤖 Auto-trade activated" : "⏹️ Auto-trade stopped."
+      !autoTrading ? "🤖 Auto-trade enabled" : "✋ Auto-trade paused"
     );
   };
 
@@ -97,7 +90,7 @@ export default function TradingPage() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
     >
-      <div className="flex justify-between items-center flex-wrap gap-4">
+      <div className="flex justify-between items-center gap-4 flex-wrap">
         <h1 className="text-2xl font-bold text-primary flex items-center gap-2">
           <Zap size={22} /> Trading Panel
         </h1>
@@ -110,19 +103,15 @@ export default function TradingPage() {
         </span>
       </div>
 
-      {/* ⚙️ Controls */}
+      {/* ⚙️ Trade Controls */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Button
           variant="secondary"
           onClick={() => handleTrade("buy")}
           disabled={loading || !connected}
-          className="flex items-center justify-center gap-2 text-lg py-4"
+          className="flex gap-2 text-lg py-4"
         >
-          {loading ? (
-            <Loader2 className="animate-spin" size={20} />
-          ) : (
-            <TrendingUp size={20} />
-          )}
+          {loading ? <Loader2 className="animate-spin" /> : <TrendingUp />}
           {loading ? "Executing..." : `Buy ${selectedToken || "BONK"}`}
         </Button>
 
@@ -130,13 +119,9 @@ export default function TradingPage() {
           variant="danger"
           onClick={() => handleTrade("sell")}
           disabled={loading || !connected}
-          className="flex items-center justify-center gap-2 text-lg py-4"
+          className="flex gap-2 text-lg py-4"
         >
-          {loading ? (
-            <Loader2 className="animate-spin" size={20} />
-          ) : (
-            <TrendingDown size={20} />
-          )}
+          {loading ? <Loader2 className="animate-spin" /> : <TrendingDown />}
           {loading ? "Executing..." : `Sell ${selectedToken || "BONK"}`}
         </Button>
 
@@ -144,34 +129,34 @@ export default function TradingPage() {
           variant="primary"
           onClick={toggleAutoTrade}
           disabled={!connected}
-          className={`flex items-center justify-center gap-2 text-lg py-4 ${
+          className={`flex gap-2 text-lg py-4 ${
             autoTrading ? "bg-green-700" : ""
           }`}
         >
           {autoTrading ? (
             <>
-              <PauseCircle size={20} /> Stop Auto-Trade
+              <PauseCircle /> Stop Auto-Trade
             </>
           ) : (
             <>
-              <PlayCircle size={20} /> Start Auto-Trade
+              <PlayCircle /> Start Auto-Trade
             </>
           )}
         </Button>
       </div>
 
-      {/* 💹 Live Stats */}
+      {/* 📊 Live Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm bg-base-200 p-4 rounded-xl">
         <p>
           Total Profit:{" "}
           <span className="text-green-400">
-            ${(stats.totalProfit ?? 0).toFixed(2)}
+            {stats.totalProfitPercent.toFixed(2)}%
           </span>
         </p>
         <p>
           Trade Volume:{" "}
           <span className="text-primary">
-            {(stats.tradeVolume ?? 0).toFixed(2)} SOL
+            {stats.tradeVolumeSol.toFixed(4)} SOL
           </span>
         </p>
         <p>
@@ -180,13 +165,14 @@ export default function TradingPage() {
         </p>
       </div>
 
-      {/* 🕒 Trade History */}
+      {/* 🧾 Recent Trades */}
       <div className="bg-base-200 rounded-xl p-4">
         <h3 className="text-primary font-semibold mb-2">Recent Trades</h3>
         <div className="h-64 overflow-y-auto text-sm font-mono space-y-2">
           {tradeHistory.length === 0 && (
             <p className="text-gray-500 italic">No trades yet...</p>
           )}
+
           {tradeHistory.map((t, idx) => (
             <div
               key={idx}

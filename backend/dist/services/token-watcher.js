@@ -7,7 +7,7 @@ const log = getLogger("token-watcher");
 // in-memory last seen token set (also persisted could be added)
 const seen = new Set();
 export async function startTokenWatcher(io) {
-    const intervalMs = Number(process.env.TOKEN_WATCH_INTERVAL_MS ?? ENV.TOKEN_WATCH_INTERVAL_MS ?? 10_000);
+    const intervalMs = ENV.TOKEN_WATCH_INTERVAL_MS;
     log.info(`Starting token watcher (interval ${intervalMs}ms)`);
     // expose global io for other modules
     if (io)
@@ -61,13 +61,11 @@ export async function startTokenWatcher(io) {
                     log.info(`New eligible token detected: ${t.symbol} (${mint}). triggering auto-buy if enabled.`);
                     seen.add(mint);
                     // Auto-buy only if enabled by ENV
-                    if (process.env.ENABLE_AUTO_BUY === "true" || ENV.ENABLE_AUTO_BUY) {
+                    if (ENV.ENABLE_AUTO_BUY) {
                         const buyRes = await autoBuyToken({
                             symbol: t.symbol,
                             mint,
                             price: Number(t.price ?? 0),
-                            marketCap: Number(t.marketCap ?? 0),
-                            liquidity: Number(t.liquidity ?? 0),
                         });
                         if (buyRes?.success) {
                             log.info(`Auto-buy succeeded for ${t.symbol}`);

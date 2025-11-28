@@ -1,0 +1,24 @@
+export const NewTokens = () => {
+  const [tokens, setTokens] = useState([]);
+  const prev = useRef({});
+  const [flash, setFlash] = useState({});
+
+  const { lastMessage } = useSocket();
+
+=======
+import { fetcher, formatNumber } from "@lib/utils";
+
+interface Token {
+  symbol: string;
+  price: number;
+  pnl: number;
+  liquidity?: number;
+  marketCap?: number;
+}
+
+export const NewTokens = () => {
+  const [tokens, setTokens] = useState<Token[]>([]);
+  const prev = useRef<Record<string, Token>>({});
+  const [flash, setFlash] = useState({});
+
+  const { lastMessage } = useSocket();

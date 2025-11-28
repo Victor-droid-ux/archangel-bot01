@@ -1,20 +1,19 @@
 import { Connection, Keypair, PublicKey, VersionedTransaction } from "@solana/web3.js";
 /**
- * Returns a singleton Solana RPC connection.
- * Uses ENV.SOLANA_RPC_URL by default.
+ * 🧠 Singleton Solana RPC connection
  */
 export declare function getConnection(): Connection;
 export declare function getWsConnection(): Connection | null;
 /**
- * Load server Keypair from SECRET_KEY in .env
+ * 🔐 Load backend signer from SECRET_KEY array in .env
  */
 export declare function loadKeypairFromEnv(): Keypair;
 /**
- * Get balance for a public key
+ * 🌐 Get wallet balance (in lamports)
  */
 export declare function getBalance(pubkey: PublicKey | string): Promise<number>;
 /**
- * Signs and sends a VersionedTransaction (e.g., from Jupiter swap)
+ * 🚀 Safe Jupiter swap executor with retry & strong confirmation
  */
-export declare function signAndSendVersionedTx(tx: VersionedTransaction, serverKeypair?: Keypair): Promise<string>;
+export declare function signAndSendVersionedTx(tx: VersionedTransaction, signer?: Keypair, maxRetries?: number): Promise<string>;
 //# sourceMappingURL=solana.service.d.ts.map

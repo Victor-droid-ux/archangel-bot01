@@ -16,66 +16,63 @@ type Point = { time: string; value: number };
 
 export const PriceChart: React.FC<{
   tokenMintOrSymbol: string;
-  width?: number;
-  height?: number;
 }> = ({ tokenMintOrSymbol }) => {
   const { lastMessage } = useSocket();
   const [data, setData] = useState<Point[]>([]);
 
-  // Accept incoming priceUpdate messages: { token, price, timestamp }
   useEffect(() => {
     if (!lastMessage) return;
+
+    // 📈 New global token prices update
+    if (lastMessage.event === "token_prices") {
+      const tokens = lastMessage.payload?.tokens;
+      if (!Array.isArray(tokens)) return;
+
+      const match = tokens.find(
+        (t: any) =>
+          t.symbol === tokenMintOrSymbol || t.mint === tokenMintOrSymbol
+      );
+      if (!match || !match.price) return;
+
+      const time = new Date().toLocaleTimeString("en-GB", { hour12: false });
+
+      setData((d) => [...d.slice(-119), { time, value: Number(match.price) }]);
+    }
+
+    // If backend starts supporting incremental updates later:
     if (lastMessage.event === "priceUpdate") {
       const p = lastMessage.payload;
       if (p?.token === tokenMintOrSymbol || p?.mint === tokenMintOrSymbol) {
-        const time = new Date(p.timestamp || Date.now()).toLocaleTimeString();
+        const time = new Date().toLocaleTimeString("en-GB", { hour12: false });
         setData((d) => [...d.slice(-119), { time, value: Number(p.price) }]);
-      }
-    }
-
-    // also accept tokenFeed with per-token price arrays
-    if (lastMessage.event === "tokenFeed") {
-      const payload = lastMessage.payload;
-      if (Array.isArray(payload.tokens)) {
-        const match = payload.tokens.find(
-          (t: any) =>
-            t.symbol === tokenMintOrSymbol || t.mint === tokenMintOrSymbol
-        );
-        if (match) {
-          const time = new Date().toLocaleTimeString();
-          setData((d) => [
-            ...d.slice(-119),
-            { time, value: Number(match.price) },
-          ]);
-        }
       }
     }
   }, [lastMessage, tokenMintOrSymbol]);
 
-  // seed with small placeholder if empty
+  // seed initial datapoint
   useEffect(() => {
     if (data.length === 0) {
       setData([{ time: new Date().toLocaleTimeString(), value: 0 }]);
     }
-  }, [data.length]);
+  }, [data]);
 
   return (
-    <div className="bg-[#111] border border-gray-800 p-4 rounded-xl h-64">
+    <div className="bg-base-200 border border-base-300 p-4 rounded-xl h-64">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data}>
-          <XAxis dataKey="time" stroke="#555" minTickGap={20} />
-          <YAxis stroke="#555" domain={["auto", "auto"]} />
+          <XAxis dataKey="time" stroke="#666" minTickGap={20} />
+          <YAxis stroke="#666" domain={["auto", "auto"]} />
           <Tooltip
             contentStyle={{
-              backgroundColor: "#1a1a1a",
-              border: "none",
+              backgroundColor: "#1f1f1f",
+              border: "1px solid #333",
               borderRadius: 8,
             }}
           />
           <Line
             type="monotone"
             dataKey="value"
-            stroke="#6366f1"
+            stroke="#8b5cf6"
             strokeWidth={2}
             dot={false}
             isAnimationActive={false}

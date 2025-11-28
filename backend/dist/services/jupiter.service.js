@@ -11,7 +11,7 @@ const SOLANA_RPC = process.env.SOLANA_RPC_URL ||
 if (!SOLANA_RPC.startsWith("http")) {
     throw new Error("SOLANA_RPC_URL must start with http:// or https://");
 }
-const JUPITER_QUOTE_URL = process.env.JUPITER_QUOTE_URL ||
+export const JUPITER_QUOTE_URL = process.env.JUPITER_QUOTE_URL ||
     process.env.NEXT_PUBLIC_JUPITER_ENDPOINT ||
     process.env.JUPITER_API_URL ||
     "https://quote-api.jup.ag/v6";
@@ -121,65 +121,55 @@ export async function getJupiterQuote(inputMint, outputMint, amountLamports, sli
  *
  * Returns { success, signature, raw } on success or { success: false, error } on failure.
  */
+// 🔥 Safe execute with simulation fallback
 export async function executeJupiterSwap(opts) {
     try {
-        // server-side keypair (must be set as a JSON array in SECRET_KEY)
-        const secretRaw = process.env.SECRET_KEY || process.env.NEXT_PUBLIC_SECRET_KEY || "[]";
-        const secretArray = Array.isArray(secretRaw)
-            ? secretRaw
-            : JSON.parse(secretRaw);
-        if (!Array.isArray(secretArray) || secretArray.length === 0) {
-            throw new Error("SERVER SECRET_KEY is missing or invalid (required to sign).");
+        // Global kill-switch: simulation mode only unless explicitly enabled
+        const useReal = process.env.USE_REAL_SWAP === "true";
+        if (!useReal) {
+            return {
+                success: true,
+                simulated: true,
+                signature: `simulated-${Date.now()}`,
+            };
         }
+        const secretRaw = process.env.SECRET_KEY;
+        if (!secretRaw) {
+            throw new Error("SECRET_KEY missing (required for real swaps).");
+        }
+        const secretArray = JSON.parse(secretRaw);
         const signer = Keypair.fromSecretKey(Uint8Array.from(secretArray));
-        // ensure we have a quote (either provided or fetch)
         const quoteResp = opts.quoteResponse ??
             (await getJupiterQuote(opts.inputMint, opts.outputMint, opts.amount, opts.slippage ?? 1));
         if (!quoteResp)
-            throw new Error("Missing Jupiter quote response (cannot build swap).");
-        // Prepare payload expected by Jupiter swap API
+            throw new Error("Missing Jupiter quote response");
         const payload = {
             quoteResponse: quoteResp,
             userPublicKey: opts.userPublicKey,
             wrapAndUnwrapSol: true,
-            // server-side-only optional flags
-            computeUnitPriceMicroLamports: undefined,
-            wrapUnwrapSOL: undefined,
-            // keep compatibility keys used by different Jupiter versions
-            wrapUnwrapSol: undefined,
         };
-        // perform swap request to Jupiter swap endpoint
         const res = await retry(() => swapClient.post("/swap", payload), 2, 400);
         const raw = res.data ?? res;
-        // swapTransaction could be in data.swapTransaction OR data.swapTransactionBase64 OR raw.swapTransaction
         const base64Tx = raw?.swapTransaction ||
             raw?.swapTransactionBase64 ||
+            raw?.data?.swapTransaction ||
+            raw?.swap_tx ||
             raw?.swap_transaction ||
-            raw?.swap_tx;
+            raw?.transaction;
         if (!base64Tx) {
-            // Some Jupiter compatible proxies return a transaction field inside raw.rawTransaction or similar
-            log.warn({ raw }, "Swap response did not include swapTransaction");
-            return {
-                success: false,
-                error: "No swap transaction returned by Jupiter.",
-            };
+            return { success: false, error: "Jupiter returned no transaction" };
         }
-        // Deserialize and sign VersionedTransaction (Jupiter returns base64 for v0)
         const versioned = VersionedTransaction.deserialize(Buffer.from(base64Tx, "base64"));
-        // server signs any required keys (this depends on the swap structure)
         versioned.sign([signer]);
-        // send transaction and wait for confirmation (use connection)
         const signature = await connection.sendTransaction(versioned, {
             skipPreflight: false,
             preflightCommitment: "confirmed",
         });
-        // confirm
-        await connection.confirmTransaction(signature, "confirmed");
-        log.info({ signature }, "Swap executed on-chain");
+        await connection.confirmTransaction({ signature, ...(await connection.getLatestBlockhash()) }, "confirmed");
         return { success: true, signature, raw };
     }
     catch (err) {
-        log.error("executeJupiterSwap failed", err?.message ?? err);
+        log.error("Swap failed", err?.message ?? err);
         return { success: false, error: err?.message ?? String(err) };
     }
 }

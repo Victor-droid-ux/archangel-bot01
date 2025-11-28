@@ -52,9 +52,8 @@ async function addTrade(input) {
         await connect();
     try {
         const timestamp = input.timestamp ? new Date(input.timestamp) : new Date();
-        const amountLamports = Number(input.amount);
+        const amountLamports = Number(input.amountLamports);
         const amountSol = amountLamports / 1e9;
-        // Normalize pnl %
         let pnlPercent = 0;
         if (typeof input.pnl === "number") {
             pnlPercent = Math.abs(input.pnl) <= 1 ? input.pnl : input.pnl / 100;
@@ -74,12 +73,10 @@ async function addTrade(input) {
             ...(pnlSol !== 0 && { pnlSol }),
             ...(input.wallet !== undefined && { wallet: input.wallet }),
             ...(input.simulated !== undefined && { simulated: input.simulated }),
-            ...(input.signature !== null && { signature: input.signature }),
+            ...(input.signature !== undefined && { signature: input.signature }),
         };
-        // Insert trade
         await tradesCol.insertOne(record);
-        // Update stats: atomic
-        const deltaOpen = input.type === "buy" ? 1 : input.type === "sell" ? -1 : 0;
+        const deltaOpen = input.type === "buy" ? 1 : -1;
         const updatedStats = await statsCol.findOneAndUpdate({}, {
             $inc: {
                 tradeVolumeSol: amountSol,
@@ -89,29 +86,20 @@ async function addTrade(input) {
             $set: { lastUpdated: new Date() },
         }, { returnDocument: "after" });
         if (!updatedStats)
-            throw new Error("Failed to update stats");
+            throw new Error("Failed updating stats");
         const s = updatedStats;
-        const recent = await tradesCol
-            .find({ pnl: { $exists: true } })
-            .sort({ timestamp: -1 })
-            .limit(500)
-            .toArray();
-        const wins = recent.filter((t) => (t.pnl ?? 0) > 0).length;
-        const winRate = recent.length ? (wins / recent.length) * 100 : 0;
-        const totalProfitPercent = s.tradeVolumeSol > 0 ? s.totalProfitSol / s.tradeVolumeSol : 0;
-        // Final stats update
+        const totalProfitPercent = s.tradeVolumeSol > 0 ? (s.totalProfitSol / s.tradeVolumeSol) * 100 : 0;
         await statsCol.updateOne({}, {
             $set: {
-                winRate,
                 totalProfitPercent,
                 portfolioValue: (s.portfolioValue ?? 0) + pnlSol,
             },
         });
-        log.info(`Trade stored & stats updated: ${record.type.toUpperCase()} ${record.token}`);
+        log.info(`Trade stored: ${record.type.toUpperCase()} ${record.token}`);
         return record;
     }
     catch (err) {
-        log.error("❌ addTrade failed:", err.message);
+        log.error("addTrade failed:", err.message);
         throw err;
     }
 }

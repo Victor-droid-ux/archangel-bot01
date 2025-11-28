@@ -7,76 +7,58 @@ import { Card } from "@components/ui/card";
 import { fetcher } from "@lib/utils";
 
 export const SocialFilter = () => {
-  const [twitterEnabled, setTwitterEnabled] = useState(true);
-  const [telegramEnabled, setTelegramEnabled] = useState(false);
-  const [twitterStats, setTwitterStats] = useState<{
-    count: number;
-    sentiment: number;
-  }>({
-    count: 0,
-    sentiment: 0,
-  });
+  const [enabled, setEnabled] = useState(true);
+  const [stats, setStats] = useState({ count: 0, sentiment: 0 });
 
   useEffect(() => {
-    if (!twitterEnabled) return;
-    const interval = setInterval(async () => {
+    if (!enabled) return;
+
+    const load = async () => {
       try {
-        // Temporary simulation — will later hit backend API: `/api/social/twitter`
-        const count = Math.floor(Math.random() * 100);
-        const sentiment = Math.floor(Math.random() * 100);
-        setTwitterStats({ count, sentiment });
-      } catch (err) {
-        console.error("Error fetching Twitter data:", err);
+        const res = await fetcher("/api/social/twitter");
+        setStats(res);
+      } catch {
+        setStats({ count: 0, sentiment: 0 });
       }
-    }, 8000);
-    return () => clearInterval(interval);
-  }, [twitterEnabled]);
+    };
+
+    load();
+    const i = setInterval(load, 10000);
+    return () => clearInterval(i);
+  }, [enabled]);
 
   return (
-    <Card className="p-4 space-y-4 bg-base-200">
+    <Card className="p-4 bg-base-200">
       <h2 className="text-lg font-semibold text-primary">Social Filters</h2>
 
-      <div className="flex items-center justify-between">
+      <div className="flex justify-between items-center mt-3">
         <div className="flex items-center gap-2">
           <Twitter size={18} className="text-sky-400" />
           <span>Twitter Mentions</span>
         </div>
-        <Switch checked={twitterEnabled} onCheckedChange={setTwitterEnabled} />
+        <Switch checked={enabled} onCheckedChange={setEnabled} />
       </div>
 
-      {twitterEnabled && (
-        <div className="pl-6 text-sm text-gray-300">
+      {enabled && (
+        <div className="mt-2 ml-6 text-sm">
           <p>
-            Mentions: <span className="font-bold">{twitterStats.count}</span>
+            Mentions: <b>{stats.count}</b>
           </p>
-          <p className="flex items-center gap-1">
-            Sentiment:{" "}
-            <span
-              className={`font-bold ${
-                twitterStats.sentiment > 50 ? "text-green-400" : "text-red-400"
-              }`}
-            >
-              {twitterStats.sentiment}%{" "}
-              {twitterStats.sentiment > 50 ? (
-                <TrendingUp size={14} />
-              ) : (
-                <TrendingDown size={14} />
-              )}
-            </span>
+
+          <p
+            className={`flex items-center gap-1 ${
+              stats.sentiment >= 50 ? "text-green-400" : "text-red-400"
+            }`}
+          >
+            Sentiment: {stats.sentiment}%{" "}
+            {stats.sentiment >= 50 ? (
+              <TrendingUp size={14} />
+            ) : (
+              <TrendingDown size={14} />
+            )}
           </p>
         </div>
       )}
-
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <MessageCircle size={18} className="text-blue-400" />
-          <span>Telegram Signals</span>
-        </div>
-        <Switch
-          checked={telegramEnabled}
-          onCheckedChange={setTelegramEnabled}
-        />
-      </div>
     </Card>
   );
 };

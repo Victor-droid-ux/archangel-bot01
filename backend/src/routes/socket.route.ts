@@ -1,62 +1,89 @@
-// backend/src/routes/socket.route.ts
 import { Server, Socket } from "socket.io";
 import { getLogger } from "../utils/logger.js";
 import { getLatestTokens } from "../services/tokenPrice.service.js";
+import dbService from "../services/db.service.js";
 
 const logger = getLogger("socket");
 
 export function registerSocketHandlers(io: Server) {
-  io.on("connection", (socket: Socket) => {
-    logger.info("⚡ Socket connected: " + socket.id);
+  io.on("connection", async (socket: Socket) => {
+    logger.info(`⚡ Socket connected: ${socket.id}`);
 
-    // Send current token prices immediately on connect (best-effort)
+    /** INITIAL TOKEN SNAPSHOT */
     try {
       const snapshot = getLatestTokens();
-      socket.emit("token_prices", { tokens: snapshot });
+      socket.emit("tokenFeed", { tokens: snapshot });
     } catch (err: any) {
       logger.warn(
         { err: err?.message },
-        "Could not load token snapshot on connect"
+        "Failed to send token snapshot on connect"
       );
     }
 
-    // Initial handshake
-    socket.emit("update", {
-      event: "connection",
-      payload: { status: "connected" },
-    });
+    /** INITIAL STATS SNAPSHOT */
+    try {
+      const stats = await dbService.getStats();
+      socket.emit("stats:update", stats);
+    } catch (err: any) {
+      logger.warn("Failed broadcasting initial stats");
+    }
 
-    // Receive logs from client
-    socket.on("tradeLog", (payload) => {
-      io.emit("update", {
-        event: "tradeLog",
-        payload,
+    /** CONFIRM CONNECTION */
+    socket.emit("connection", { status: "connected" });
+
+    /**
+     * FRONTEND TRADE EVENTS → Broadcast to all
+     * and trigger stats recalculation
+     */
+    socket.on("tradeLog", async (payload) => {
+      logger.info("📥 tradeLog received → broadcasting");
+      io.emit("tradeFeed", {
+        ...payload,
         timestamp: new Date().toISOString(),
       });
+
+      const stats = await dbService.getStats();
+      io.emit("stats:update", stats);
     });
 
-    // Admin/backend triggers
-    socket.on("trade:update", (payload) => {
-      io.emit("update", { event: "trade:update", payload });
+    socket.on("trade:update", async (payload) => {
+      logger.info("📡 trade:update received");
+      io.emit("tradeFeed", payload);
+
+      const stats = await dbService.getStats();
+      io.emit("stats:update", stats);
     });
 
-    // Token discovery ISR realtime updates
+    /**
+     * TOKEN DISCOVERY LIVE UPDATES
+     */
     socket.on("tokenFeed", (payload) => {
-      logger.info("🔄 Broadcasting tokenFeed");
+      logger.info("🔄 tokenFeed update");
       io.emit("tokenFeed", payload);
     });
 
-    // Price updates (backend streaming)
+    /**
+     * PRICE STREAM PASS-THROUGH
+     */
     socket.on("priceUpdate", (payload) => {
       io.emit("priceUpdate", payload);
     });
 
-    socket.on("disconnect", (reason) => {
-      logger.warn(`❌ Socket disconnected: ${socket.id} (${reason})`);
+    /**
+     * FRONTEND CAN REQUEST CURRENT STATS
+     */
+    socket.on("stats:request", async () => {
+      const stats = await dbService.getStats();
+      socket.emit("stats:update", stats);
     });
 
-    socket.on("error", (err) => {
-      logger.error("Socket error: " + (err?.message ?? String(err)));
-    });
+    /** DISCONNECT */
+    socket.on("disconnect", (reason) =>
+      logger.warn(`❌ Disconnected: ${socket.id} (${reason})`)
+    );
+
+    socket.on("error", (err) =>
+      logger.error("Socket error: " + (err?.message ?? String(err)))
+    );
   });
 }

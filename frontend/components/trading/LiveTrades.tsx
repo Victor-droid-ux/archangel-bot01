@@ -26,6 +26,7 @@ export const LiveTrades: React.FC = () => {
 
     const t = lastMessage.payload;
     const now = new Date().toLocaleTimeString("en-GB", { hour12: false });
+
     const row: TradeRow = {
       id: t.id ?? crypto.randomUUID(),
       time: now,
@@ -35,6 +36,7 @@ export const LiveTrades: React.FC = () => {
       pnl: typeof t.pnl === "number" ? t.pnl : undefined,
       signature: t.signature ?? null,
     };
+
     setTrades((prev) => [row, ...prev].slice(0, 200));
   }, [lastMessage]);
 
@@ -86,7 +88,7 @@ export const LiveTrades: React.FC = () => {
                       } font-semibold`}
                     >
                       {t.pnl >= 0 ? "+" : ""}
-                      {(t.pnl * 100).toFixed(2)}%
+                      {t.pnl.toFixed(2)}%
                     </span>
                   ) : (
                     <span className="text-slate-400">—</span>

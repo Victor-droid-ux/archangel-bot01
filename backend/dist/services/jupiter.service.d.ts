@@ -1,3 +1,17 @@
+export type JupiterSwapResponse = {
+    success: true;
+    signature: string;
+    raw?: any;
+    simulated?: boolean;
+    error?: never;
+} | {
+    success: false;
+    error: string;
+    signature?: never;
+    raw?: never;
+    simulated?: never;
+};
+export declare const JUPITER_QUOTE_URL: string;
 /**
  * Fetch best Jupiter quote for a swap.
  * returns parsed quote or null on failure.
@@ -17,17 +31,7 @@ export declare function executeJupiterSwap(opts: {
     amount: number;
     userPublicKey: string;
     slippage?: number;
-}): Promise<{
-    success: boolean;
-    signature: string;
-    raw: any;
-    error?: never;
-} | {
-    success: boolean;
-    error: any;
-    signature?: never;
-    raw?: never;
-}>;
+}): Promise<JupiterSwapResponse>;
 /**
  * Fetch token list from jup ag token list (or fallback)
  */

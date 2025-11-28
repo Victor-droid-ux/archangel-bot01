@@ -1,4 +1,3 @@
-// frontend/hooks/useTrade.ts
 "use client";
 
 import { useState } from "react";
@@ -9,12 +8,6 @@ import { useStats } from "@hooks/useStats";
 import { useSocket } from "@hooks/useSocket";
 import { fetcher } from "@lib/utils";
 
-/**
- * useTrade
- * - posts to /api/trade
- * - falls back to a safe local simulation if backend is down
- * - emits a clear socket payload consumed by LiveFeed & useStats
- */
 export const useTrade = () => {
   const { publicKey, connected } = useWallet();
   const {
@@ -26,47 +19,38 @@ export const useTrade = () => {
     jupiterRoute,
     selectedToken,
   } = useTradingConfigStore();
+
   const { stats, updateStats } = useStats();
   const { sendMessage } = useSocket();
 
   const [loading, setLoading] = useState(false);
 
-  /**
-   * type: "buy" | "sell"
-   * token: the token mint OR symbol depending on how you wire it (recommended: pass mint)
-   */
-  const executeTrade = async (
-    type: "buy" | "sell",
-    tokenMintOrSymbol: string
-  ) => {
+  const executeTrade = async (type: "buy" | "sell", tokenMint: string) => {
     if (!connected || !publicKey) {
-      toast.error("Please connect your wallet first.");
-      return;
+      toast.error("Connect your wallet to trade.");
+      return null;
     }
 
     setLoading(true);
-    toast.loading(
-      `${type === "buy" ? "Buying" : "Selling"} ${tokenMintOrSymbol}...`,
-      {
-        id: "trade-status",
-      }
-    );
+    toast.loading(`${type === "buy" ? "Buying" : "Selling"} ${tokenMint}…`, {
+      id: "trade-status",
+    });
 
     try {
-      // Prefer explicit outputMint from param; fall back to selectedToken from config
-      const outputMint = tokenMintOrSymbol || selectedToken;
-      if (!outputMint) throw new Error("No token selected for swap.");
+      const slippageBps = Math.floor(slippage * 100);
+      const inputMint = "So11111111111111111111111111111111111111112";
+      const mint = tokenMint || selectedToken;
+      if (!mint) throw new Error("Missing token");
 
-      // Send trade request to backend (fetcher adds content-type header)
-      const res = await fetcher("/api/trade", {
+      const res: any = await fetcher("/api/trade", {
         method: "POST",
         body: JSON.stringify({
           type,
-          inputMint: "So11111111111111111111111111111111111111112", // base SOL
-          outputMint,
+          inputMint,
+          outputMint: mint,
           wallet: publicKey,
-          amount, // amount in lamports or per your contract (keep consistent)
-          slippage,
+          amount,
+          slippageBps,
           takeProfit,
           stopLoss,
           autoTrade,
@@ -74,103 +58,75 @@ export const useTrade = () => {
         }),
       }).catch(() => null);
 
-      // If backend not available, simulate a consistent payload
-      let payload: any;
-      if (!res || !res.success) {
-        console.warn("Backend unavailable — simulating trade result.");
-        const simulatedPrice = parseFloat(
-          (Math.random() * 0.002 + 0.0005).toFixed(6)
-        );
-        const simulatedPnl = parseFloat(
-          (Math.random() * 0.05 - 0.02).toFixed(3)
-        ); // decimal fraction, e.g. 0.02 => 2%
-        payload = {
+      let trade: any;
+
+      if (!res?.success) {
+        console.warn("⚠ Backend failed → simulated trade");
+        trade = {
           simulated: true,
-          token: outputMint,
-          outputMint,
-          amount: amount, // keep same unit as request (likely lamports)
-          price: simulatedPrice,
-          pnl: simulatedPnl,
-          signature: `simulated-${Date.now()}`,
+          id: crypto.randomUUID(),
+          type,
+          token: mint,
+          amount,
+          price: Number((Math.random() * 0.0015 + 0.0004).toFixed(6)),
+          pnl: Number((Math.random() * 0.04 - 0.015).toFixed(3)),
+          signature: `sim-${Date.now()}`,
           timestamp: new Date().toISOString(),
         };
       } else {
-        // Normalise backend response shape. Many backends return data.data or data
-        const data = res.data ?? res;
-        payload = {
-          simulated: !!res.simulated || false,
-          token: data.token ?? data.outputMint ?? outputMint,
-          outputMint: data.outputMint ?? outputMint,
-          amount: Number(data.amount ?? amount ?? 0),
-          price: Number(data.price ?? data.outPrice ?? 0),
-          // Accept both decimal PnL (0.02) or percent string "2.0" — normalize to decimal fraction
-          pnl: normalizePnl(data.pnl),
-          signature: data.signature ?? data.txSignature ?? null,
-          timestamp: data.timestamp ?? new Date().toISOString(),
+        const d = res.data;
+        trade = {
+          simulated: false,
+          id: d.id ?? crypto.randomUUID(),
+          type,
+          token: d.token ?? mint,
+          amount: Number(d.amount ?? amount),
+          price: Number(d.price ?? 0),
+          pnl: normalizePnl(d.pnl),
+          signature: d.signature ?? null,
+          timestamp: d.timestamp ?? new Date().toISOString(),
         };
       }
 
-      // Emit well-structured socket message for LiveFeed
-      sendMessage("tradeLog", {
-        id: payload.signature ?? crypto.randomUUID(),
-        type,
-        token: payload.token,
-        outputMint: payload.outputMint,
-        amount: payload.amount,
-        price: payload.price,
-        pnl: payload.pnl,
-        simulated: payload.simulated,
-        signature: payload.signature,
-        timestamp: payload.timestamp,
-        // human-readable message for quick UI
-        message: `${type === "buy" ? "Bought" : "Sold"} ${(
-          payload.amount / 1e9
-        ).toFixed(6)} ${payload.token} @ ${payload.price} SOL (${(
-          payload.pnl * 100
-        ).toFixed(2)}% PnL)`,
-      });
+      // 👉 Broadcast live event properly
+      sendMessage("tradeFeed", trade);
 
-      // Update local dashboard stats
+      // 📊 Update stats correctly
+      const amountSol = trade.amount / 1e9;
+      const profitSol = amountSol * trade.pnl;
+      const profitPercent = trade.pnl * 100;
+
       updateStats({
-        totalProfit: stats.totalProfit + Number(payload.pnl ?? 0),
-        openTrades: stats.openTrades + (type === "buy" ? 1 : 0), // increment buys
-        tradeVolume: stats.tradeVolume + Number(payload.amount ?? 0) / 1e9,
+        totalProfitSol: stats.totalProfitSol + profitSol,
+        totalProfitPercent: stats.totalProfitPercent + profitPercent,
+        tradeVolumeSol: stats.tradeVolumeSol + amountSol,
+        openTrades:
+          type === "buy"
+            ? stats.openTrades + 1
+            : Math.max(stats.openTrades - 1, 0),
       });
 
       toast.success(
-        `${type === "buy" ? "✅ Bought" : "💸 Sold"} ${payload.token} ${
-          payload.simulated ? "(simulated)" : ""
+        `${type === "buy" ? "Bought" : "Sold"} ${trade.token} ${
+          trade.simulated ? "(sim)" : ""
         }`,
         { id: "trade-status" }
       );
 
-      console.log("✅ Trade result payload:", payload);
-      return payload;
+      return trade;
     } catch (err: any) {
-      toast.error(`Trade failed: ${err?.message ?? err}`);
-      console.error("executeTrade error:", err);
+      toast.error(`Trade failed: ${err.message}`);
+      console.error(err);
       return null;
     } finally {
       setLoading(false);
     }
   };
 
-  // helper: normalize PnL to decimal fraction (e.g., 2 -> 0.02, 0.02 -> 0.02)
   const normalizePnl = (raw: any): number => {
-    if (raw === undefined || raw === null) return 0;
-    // numeric value
     const n = Number(raw);
-    if (Number.isNaN(n)) {
-      // try to parse percent strings like "2.3%" or "+2.3%"
-      const s = String(raw).replace("%", "").replace("+", "");
-      const parsed = Number(s);
-      if (!Number.isNaN(parsed))
-        return parsed > 10 ? parsed / 100 : parsed / 100; // best-effort
-      return 0;
-    }
-    // if n looks like percent (e.g., 2 or 2.0) and likely intended as percent (heuristic)
-    if (Math.abs(n) > 1.5) return n / 100;
-    return n;
+    if (isNaN(n)) return 0;
+    return Math.abs(n) > 1.5 ? n / 100 : n;
   };
 
   return { executeTrade, loading };

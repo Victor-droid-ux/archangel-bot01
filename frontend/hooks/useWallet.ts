@@ -1,14 +1,13 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Connection, PublicKey, clusterApiUrl } from "@solana/web3.js";
 import {
   PhantomWalletAdapter,
   SolflareWalletAdapter,
   TorusWalletAdapter,
   LedgerWalletAdapter,
 } from "@solana/wallet-adapter-wallets";
-
+import { PublicKey } from "@solana/web3.js";
 
 interface WalletState {
   connected: boolean;
@@ -18,54 +17,79 @@ interface WalletState {
 }
 
 export const useWallet = (): WalletState => {
+  const [wallet, setWallet] = useState<any>(null);
   const [connected, setConnected] = useState(false);
   const [publicKey, setPublicKey] = useState<string | null>(null);
-  const [wallet, setWallet] = useState<any>(null);
 
-  // Setup Solana connection
-  const connection = new Connection(clusterApiUrl("mainnet-beta"), "confirmed");
-
+  /* -------------------------------------------------
+     Detect wallet providers in browser
+  ------------------------------------------------- */
   useEffect(() => {
-    // Try Phantom first, fallback to Solflare or Backpack
-    const adapters = [
-      new PhantomWalletAdapter(),
-      new SolflareWalletAdapter(),
-      new TorusWalletAdapter(),
-      new LedgerWalletAdapter(),
-      // new BackpackWalletAdapter(), // enable if installed separately
-    ];
+    if (typeof window === "undefined") return;
 
-
-    const availableWallet = adapters.find((w) => w.readyState === "Installed");
-    if (availableWallet) {
-      setWallet(availableWallet);
+    // Phantom
+    if ((window as any).solana?.isPhantom) {
+      setWallet(new PhantomWalletAdapter());
+      return;
     }
+
+    // Solflare
+    if ((window as any).solflare) {
+      setWallet(new SolflareWalletAdapter());
+      return;
+    }
+
+    // Torus fallback
+    setWallet(new TorusWalletAdapter());
   }, []);
 
+  /* -------------------------------------------------
+     Connect
+  ------------------------------------------------- */
   const connectWallet = useCallback(async () => {
     if (!wallet) {
-      alert("No Solana wallet detected. Please install Phantom or Solflare.");
+      alert("No wallet detected. Install Phantom or Solflare.");
       return;
     }
 
     try {
       await wallet.connect();
-      setConnected(true);
-      setPublicKey(wallet.publicKey?.toString() || null);
-      console.log("✅ Connected:", wallet.publicKey?.toString());
+
+      const pk: PublicKey | null = wallet.publicKey ?? null;
+
+      if (pk) {
+        setConnected(true);
+        setPublicKey(pk.toString());
+        console.log("✅ Wallet connected:", pk.toString());
+      }
+
+      // auto-handle wallet disconnects (Phantom, Solflare)
+      wallet.on("disconnect", () => {
+        setConnected(false);
+        setPublicKey(null);
+        console.log("👋 Wallet disconnected");
+      });
     } catch (err) {
       console.error("❌ Wallet connection failed:", err);
     }
   }, [wallet]);
 
+  /* -------------------------------------------------
+     Disconnect
+  ------------------------------------------------- */
   const disconnectWallet = useCallback(() => {
     if (wallet) {
       wallet.disconnect();
-      setConnected(false);
-      setPublicKey(null);
-      console.log("👋 Wallet disconnected");
     }
+    setConnected(false);
+    setPublicKey(null);
+    console.log("👋 Wallet disconnected by user");
   }, [wallet]);
 
-  return { connected, publicKey, connectWallet, disconnectWallet };
+  return {
+    connected,
+    publicKey,
+    connectWallet,
+    disconnectWallet,
+  };
 };

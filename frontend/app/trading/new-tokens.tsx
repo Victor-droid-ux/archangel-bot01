@@ -9,42 +9,45 @@ import { fetcher, formatNumber } from "@lib/utils";
 interface Token {
   symbol: string;
   price: number;
-  pnl?: number;
+  pnl: number;
   liquidity?: number;
   marketCap?: number;
 }
 
 export const NewTokens = () => {
   const [tokens, setTokens] = useState<Token[]>([]);
-  const prevValues = useRef<Record<string, Token>>({});
-  const [flash, setFlash] = useState<Record<string, "up" | "down" | null>>({});
+  const prev = useRef<Record<string, Token>>({});
+  const [flash, setFlash] = useState<Record<string, "up" | "down">>({});
 
   const { lastMessage } = useSocket();
 
+  // initial load
+  useEffect(() => {
+    fetcher("/api/tokens").then((res) => setTokens(res.tokens || []));
+  }, []);
+
+  // socket updates
   useEffect(() => {
     if (!lastMessage) return;
     if (lastMessage.event !== "tokenFeed") return;
 
-    const incoming: Token[] = lastMessage.payload?.tokens || [];
+    const incoming = lastMessage.payload.tokens;
     if (!Array.isArray(incoming)) return;
 
-    const flashes: Record<string, "up" | "down" | null> = {};
+    const flashMap: Record<string, "up" | "down"> = {};
 
-    for (const newTok of incoming) {
-      const oldTok = prevValues.current[newTok.symbol];
+    for (const t of incoming) {
+      const prevTok = prev.current[t.symbol];
 
-      if (oldTok) {
-        if (newTok.price > oldTok.price) flashes[newTok.symbol] = "up";
-        else if (newTok.price < oldTok.price) flashes[newTok.symbol] = "down";
-        else flashes[newTok.symbol] = null;
-      } else {
-        flashes[newTok.symbol] = null; // first load
+      if (prevTok) {
+        if (t.price > prevTok.price) flashMap[t.symbol] = "up";
+        else if (t.price < prevTok.price) flashMap[t.symbol] = "down";
       }
 
-      prevValues.current[newTok.symbol] = newTok;
+      prev.current[t.symbol] = t;
     }
 
-    setFlash(flashes);
+    setFlash(flashMap);
     setTimeout(() => setFlash({}), 700);
 
     setTokens(incoming);
@@ -52,68 +55,49 @@ export const NewTokens = () => {
 
   return (
     <Card className="bg-base-200 rounded-xl shadow p-4">
-      <CardHeader className="flex items-center justify-between">
-        <CardTitle className="text-lg font-semibold flex items-center gap-2 text-primary">
-          <Sparkles size={18} />
-          New Token Discovery
+      <CardHeader>
+        <CardTitle className="text-lg font-semibold flex gap-2 text-primary">
+          <Sparkles size={18} /> New Tokens
         </CardTitle>
       </CardHeader>
 
       <CardContent>
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-gray-400 border-b border-base-300">
-              <th className="pb-2">Token</th>
-              <th className="pb-2">Price</th>
-              <th className="pb-2">24h</th>
-              <th className="pb-2">Liquidity</th>
-              <th className="pb-2">Market Cap</th>
+            <tr className="border-b border-base-300 text-gray-400">
+              <th>Token</th>
+              <th>Price</th>
+              <th>24h</th>
+              <th>Liquidity</th>
+              <th>MCap</th>
             </tr>
           </thead>
 
           <tbody>
-            {tokens.map((t) => {
-              const flashType = flash[t.symbol];
+            {tokens.map((t) => (
+              <tr key={t.symbol} className="border-b border-base-300">
+                <td>{t.symbol}</td>
 
-              return (
-                <tr
-                  key={t.symbol}
-                  className="border-b border-base-300 hover:bg-base-300/30 transition"
+                <td
+                  className={`${
+                    flash[t.symbol] === "up"
+                      ? "bg-green-500/30"
+                      : flash[t.symbol] === "down"
+                      ? "bg-red-500/30"
+                      : ""
+                  }`}
                 >
-                  <td className="py-2 font-medium">{t.symbol}</td>
+                  {formatNumber(t.price)}
+                </td>
 
-                  <td
-                    className={`transition-all duration-500 ${
-                      flashType === "up"
-                        ? "bg-green-500/30"
-                        : flashType === "down"
-                        ? "bg-red-500/30"
-                        : ""
-                    }`}
-                  >
-                    {formatNumber(t.price)}
-                  </td>
+                <td className={t.pnl >= 0 ? "text-green-400" : "text-red-400"}>
+                  {(t.pnl >= 0 ? "+" : "") + t.pnl}%
+                </td>
 
-                  <td
-                    className={`transition-all duration-500 ${
-                      (t.pnl ?? 0) >= 0 ? "text-green-400" : "text-red-400"
-                    }`}
-                  >
-                    <div className="flex items-center gap-1">
-                      {(t.pnl ?? 0) >= 0 ? (
-                        <ArrowUpRight size={14} />
-                      ) : (
-                        <ArrowDownRight size={14} />
-                      )}
-                      {t.pnl?.toFixed(2)}%
-                    </div>
-                  </td>
-
-                  <td>{formatNumber(t.liquidity || 0)}</td>
-                  <td>{formatNumber(t.marketCap || 0)}</td>
-                </tr>
-              );
-            })}
+                <td>{formatNumber(t.liquidity || 0)}</td>
+                <td>{formatNumber(t.marketCap || 0)}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </CardContent>

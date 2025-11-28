@@ -1,7 +1,7 @@
 // frontend/components/trading/performance-chart.tsx
 "use client";
 
-import React from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   LineChart,
   Line,
@@ -10,16 +10,39 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { useStats } from "@hooks/useStats";
+import { useSocket } from "@hooks/useSocket";
 
-const data = [
-  { time: "09:00", pnl: 0 },
-  { time: "09:30", pnl: 2.5 },
-  { time: "10:00", pnl: 1.2 },
-  { time: "10:30", pnl: 3.8 },
-  { time: "11:00", pnl: 5.1 },
-];
+interface ChartPoint {
+  time: string;
+  pnl: number;
+}
 
 export default function PerformanceChart() {
+  const { stats } = useStats();
+  const { lastMessage } = useSocket();
+  const [history, setHistory] = useState<ChartPoint[]>([]);
+
+  // Add data point when live stats update
+  useEffect(() => {
+    if (!lastMessage || lastMessage.event !== "stats:update") return;
+
+    const now = new Date().toLocaleTimeString("en-GB", { hour12: false });
+
+    setHistory((prev) => [
+      ...prev.slice(-29), // Keep last 30 points for smooth view
+      { time: now, pnl: Number(stats.totalProfitPercent) || 0 },
+    ]);
+  }, [lastMessage, stats.totalProfitPercent]);
+
+  // Default placeholder to render before data arrives
+  const data = useMemo(() => {
+    if (history.length === 0) {
+      return [{ time: "--", pnl: 0 }];
+    }
+    return history;
+  }, [history]);
+
   return (
     <div className="bg-base-200 rounded-xl p-4 shadow-md">
       <h2 className="text-lg font-semibold mb-3 text-primary">
@@ -28,8 +51,8 @@ export default function PerformanceChart() {
 
       <ResponsiveContainer width="100%" height={200}>
         <LineChart data={data}>
-          <XAxis dataKey="time" stroke="#888" />
-          <YAxis stroke="#888" />
+          <XAxis dataKey="time" stroke="#888" interval="preserveEnd" />
+          <YAxis stroke="#888" domain={["auto", "auto"]} />
           <Tooltip
             contentStyle={{
               backgroundColor: "#1d1f21",
@@ -40,9 +63,10 @@ export default function PerformanceChart() {
           <Line
             type="monotone"
             dataKey="pnl"
-            stroke="#00c853"
+            stroke={stats.totalProfitPercent >= 0 ? "#22c55e" : "#ef4444"}
             strokeWidth={2}
             dot={false}
+            isAnimationActive={true}
           />
         </LineChart>
       </ResponsiveContainer>

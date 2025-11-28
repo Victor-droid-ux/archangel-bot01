@@ -12,8 +12,7 @@ type Position = {
   netSol: number;
   avgBuyPrice?: number;
   currentPrice?: number;
-  unrealizedPnlSol?: number;
-  unrealizedPnlPct?: number;
+  unrealizedPnlPct?: number; // Already % value (e.g. 5 = 5%)
 };
 
 export const PositionsPanel: React.FC = () => {
@@ -24,8 +23,10 @@ export const PositionsPanel: React.FC = () => {
   const loadPositions = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetcher("/api/positions").catch(() => null);
-      if (data) setPositions(data.positions ?? []);
+      const data = await fetcher("/api/positions");
+      if (data?.positions) {
+        setPositions(data.positions);
+      }
     } catch (err) {
       console.warn("Failed loading positions:", err);
     } finally {
@@ -35,15 +36,18 @@ export const PositionsPanel: React.FC = () => {
 
   useEffect(() => {
     loadPositions();
-    const t = setInterval(loadPositions, 15000); // refresh 15s
+    const t = setInterval(loadPositions, 15000);
     return () => clearInterval(t);
   }, [loadPositions]);
 
-  // on tradeFeed update, refresh positions (or update incrementally)
+  // 🔥 Handle live updates
   useEffect(() => {
     if (!lastMessage) return;
-    if (lastMessage.event === "tradeFeed") {
-      // simple approach: refetch positions
+
+    if (
+      lastMessage.event === "tradeFeed" ||
+      lastMessage.event === "position:update"
+    ) {
       loadPositions();
     }
   }, [lastMessage, loadPositions]);
@@ -51,19 +55,22 @@ export const PositionsPanel: React.FC = () => {
   return (
     <Card className="bg-base-200 rounded-xl shadow p-4">
       <CardHeader>
-        <CardTitle className="text-lg font-semibold text-primary">
-          Positions
+        <CardTitle className="text-lg font-semibold text-primary flex justify-between">
+          <span>Positions</span>
+          <span className={connected ? "text-green-400" : "text-red-400"}>
+            {connected ? "Live" : "Offline"}
+          </span>
         </CardTitle>
       </CardHeader>
 
       <CardContent>
         {loading ? (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 py-4">
             <Loader2 className="animate-spin" />
-            <div className="text-sm text-gray-400">Loading positions...</div>
+            <span className="text-sm text-gray-400">Loading positions...</span>
           </div>
         ) : positions.length === 0 ? (
-          <div className="text-sm text-gray-400">No open positions.</div>
+          <div className="text-sm text-gray-400 py-4">No open positions.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -76,33 +83,35 @@ export const PositionsPanel: React.FC = () => {
                   <th className="py-2 text-right">Unrealized PnL</th>
                 </tr>
               </thead>
+
               <tbody>
                 {positions.map((p) => {
-                  const pnlClass =
-                    (p.unrealizedPnlPct ?? 0) >= 0
-                      ? "text-green-400"
-                      : "text-red-400";
+                  const pct = p.unrealizedPnlPct ?? 0;
+                  const pnlColor = pct >= 0 ? "text-green-400" : "text-red-400";
+
                   return (
                     <tr
                       key={p.token}
-                      className="border-b border-base-300 hover:bg-base-300/30 transition"
+                      className="border-b border-base-300 hover:bg-base-300/20 transition"
                     >
                       <td className="py-2 font-medium">{p.token}</td>
+
                       <td className="py-2 text-right">
                         {formatNumber(p.netSol)}
                       </td>
+
                       <td className="py-2 text-right">
                         {p.avgBuyPrice ? formatNumber(p.avgBuyPrice) : "—"}
                       </td>
+
                       <td className="py-2 text-right">
                         {p.currentPrice ? formatNumber(p.currentPrice) : "—"}
                       </td>
+
                       <td
-                        className={`py-2 text-right font-semibold ${pnlClass}`}
+                        className={`py-2 text-right font-semibold ${pnlColor}`}
                       >
-                        {typeof p.unrealizedPnlPct === "number"
-                          ? `${(p.unrealizedPnlPct * 100).toFixed(2)}%`
-                          : "—"}
+                        {pct.toFixed(2)}%
                       </td>
                     </tr>
                   );

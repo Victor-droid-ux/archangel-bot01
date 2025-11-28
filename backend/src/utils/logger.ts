@@ -1,5 +1,5 @@
 // backend/src/utils/logger.ts
-import pino from "pino";
+import pino, { Logger } from "pino";
 
 const isDev = process.env.NODE_ENV !== "production";
 
@@ -25,6 +25,7 @@ const baseLogger = pino({
  * ✅ Namespaced module logger
  * @example const logger = getLogger("TradeRoute");
  */
-export const getLogger = (name: string) => baseLogger.child({ module: name });
+export const getLogger = (name: string): Logger =>
+  baseLogger.child({ module: name });
 
 export default baseLogger;

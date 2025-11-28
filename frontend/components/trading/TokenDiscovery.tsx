@@ -1,4 +1,3 @@
-// components/trading/TokenDiscovery.tsx
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
@@ -17,18 +16,26 @@ type TokenItem = {
   marketCap?: number;
 };
 
+type TokensResponse = {
+  success: boolean;
+  tokens: TokenItem[];
+};
+
 export const TokenDiscovery: React.FC = () => {
   const [tokens, setTokens] = useState<TokenItem[]>([]);
   const [loading, setLoading] = useState(true);
+
   const { lastMessage, connected } = useSocket();
 
   const loadTokens = useCallback(async () => {
-    setLoading(true);
     try {
-      const data = await fetcher("/api/tokens").catch(() => null);
-      if (data?.tokens) setTokens(data.tokens);
+      setLoading(true);
+      const res = await fetcher<TokensResponse>("/api/tokens");
+      if (res?.success && Array.isArray(res.tokens)) {
+        setTokens(res.tokens);
+      }
     } catch (err) {
-      console.warn("Failed to fetch tokens:", err);
+      console.warn("❌ Failed to load tokens:", err);
     } finally {
       setLoading(false);
     }
@@ -36,34 +43,19 @@ export const TokenDiscovery: React.FC = () => {
 
   useEffect(() => {
     loadTokens();
-    const t = setInterval(loadTokens, 10_000); // every 10s
-    return () => clearInterval(t);
+    const interval = setInterval(loadTokens, 10000);
+    return () => clearInterval(interval);
   }, [loadTokens]);
 
-  // Replace / update list with socket updates
+  // 🔄 Live updates from websocket
   useEffect(() => {
     if (!lastMessage) return;
-    if (lastMessage.event === "tokenFeed") {
-      const payload = lastMessage.payload;
-      // payload.tokens expected: array of tokens
-      if (Array.isArray(payload?.tokens)) {
-        setTokens(payload.tokens);
-      } else if (payload?.token) {
-        // incremental update
-        setTokens((prev) => {
-          const idx = prev.findIndex(
-            (p) =>
-              p.symbol === payload.token.symbol || p.mint === payload.token.mint
-          );
-          if (idx >= 0) {
-            const updated = [...prev];
-            updated[idx] = { ...updated[idx], ...payload.token };
-            return updated;
-          }
-          return [payload.token, ...prev].slice(0, 100);
-        });
-      }
-    }
+
+    if (lastMessage.event !== "token_prices") return;
+    const payload = lastMessage.payload;
+    if (!Array.isArray(payload?.tokens)) return;
+
+    setTokens(payload.tokens);
   }, [lastMessage]);
 
   return (
@@ -72,19 +64,22 @@ export const TokenDiscovery: React.FC = () => {
         <CardTitle className="text-lg font-semibold text-primary">
           New Token Discovery
         </CardTitle>
-        <div className="text-xs text-gray-400">
+
+        <div
+          className={`text-xs ${connected ? "text-green-400" : "text-red-400"}`}
+        >
           {connected ? "Live" : "Offline"}
         </div>
       </CardHeader>
 
       <CardContent>
         {loading ? (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 py-6">
             <Loader2 className="animate-spin" />
-            <div className="text-sm text-gray-400">Loading tokens...</div>
+            <span className="text-sm text-gray-400">Loading tokens...</span>
           </div>
         ) : tokens.length === 0 ? (
-          <div className="text-sm text-gray-400">No tokens found.</div>
+          <div className="text-sm text-gray-400 py-4">No tokens detected.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -92,30 +87,25 @@ export const TokenDiscovery: React.FC = () => {
                 <tr className="text-left text-gray-400 border-b border-base-300">
                   <th className="py-2">Token</th>
                   <th className="py-2 text-right">Price (SOL)</th>
-                  <th className="py-2 text-right">24h</th>
                   <th className="py-2 text-right">Liquidity</th>
                 </tr>
               </thead>
+
               <tbody>
                 {tokens.map((t) => (
                   <tr
-                    key={t.symbol ?? t.mint}
-                    className="border-b border-base-300 hover:bg-base-300/30 transition"
+                    key={t.mint || t.symbol}
+                    className="border-b border-base-300 hover:bg-base-300/20 transition"
                   >
                     <td className="py-2 font-medium">
                       {t.name ?? t.symbol}{" "}
                       <span className="text-xs opacity-60">({t.symbol})</span>
                     </td>
-                    <td className="py-2 text-right">{formatNumber(t.price)}</td>
-                    <td
-                      className={`py-2 text-right ${
-                        typeof t.pnl === "number" && t.pnl >= 0
-                          ? "text-green-400"
-                          : "text-red-400"
-                      }`}
-                    >
-                      {typeof t.pnl === "number" ? `${t.pnl}%` : "—"}
+
+                    <td className="py-2 text-right">
+                      {formatNumber(t.price ?? 0)}
                     </td>
+
                     <td className="py-2 text-right">
                       {t.liquidity ? formatNumber(t.liquidity) : "—"}
                     </td>

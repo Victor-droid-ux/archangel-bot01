@@ -1,133 +1,123 @@
-// backend/src/services/auto-trader.ts
 import { getLogger } from "../utils/logger.js";
-import * as jupiter from "./jupiter.service.js";
+import { getJupiterQuote, executeJupiterSwap } from "../lib/jupiter.js";
 import dbService from "./db.service.js";
 import { ENV } from "../utils/env.js";
 const log = getLogger("auto-trader");
-// SOL mint constant
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+/** Resolve a usable backend wallet */
+function resolveWallet() {
+    const wallet = ENV.SERVER_PUBLIC_KEY ||
+        process.env.BACKEND_RECEIVER_WALLET ||
+        process.env.WALLET_FALLBACK ||
+        "";
+    if (!wallet)
+        throw new Error("❌ Missing backend wallet to execute swap");
+    return wallet;
+}
 export async function autoBuyToken(token) {
     try {
-        const amountSol = Number(process.env.AUTO_BUY_AMOUNT_SOL ?? ENV.AUTO_BUY_AMOUNT_SOL ?? 0.1); // default 0.1 SOL
+        const wallet = resolveWallet();
+        const amountSol = ENV.AUTO_BUY_AMOUNT_SOL ?? 0.1;
         const lamports = Math.round(amountSol * 1e9);
-        log.info(`Attempting auto-buy for ${token.symbol} (${token.mint}) amount ${amountSol} SOL`);
-        // get a quote from Jupiter
-        const quote = await jupiter.getJupiterQuote(SOL_MINT, token.mint, lamports, ENV.DEFAULT_SLIPPAGE);
-        if (!quote) {
-            throw new Error("No quote from Jupiter");
-        }
-        // execute swap (server-side signing)
-        const swapResult = await jupiter.executeJupiterSwap({
-            quoteResponse: quote,
+        const slippage = ENV.DEFAULT_SLIPPAGE_PCT ?? 1;
+        const quote = await getJupiterQuote(SOL_MINT, token.mint, lamports, slippage);
+        if (!quote)
+            throw new Error("Failed to get Jupiter quote");
+        const swap = await executeJupiterSwap({
             inputMint: SOL_MINT,
             outputMint: token.mint,
             amount: lamports,
-            userPublicKey: ENV.SERVER_PUBLIC_KEY || ENV.DEFAULT_SERVER_WALLET || "", // optional
-            slippage: ENV.DEFAULT_SLIPPAGE,
+            userPublicKey: wallet,
+            slippage,
         });
-        if (!swapResult.success) {
-            log.error("Auto-buy failed: " + swapResult.error);
-            return { success: false, error: swapResult.error };
-        }
-        // compute pnl placeholder (0 initially)
-        const pnl = 0;
-        // record trade in DB
-        const tradePayload = {
+        if (!swap.success)
+            throw new Error(swap.error);
+        const amountTokens = Number(quote.outAmount ?? 0) / 1e9;
+        const price = amountTokens > 0
+            ? Number((amountSol / amountTokens).toFixed(9))
+            : token.price;
+        const trade = {
+            id: `autoBuy-${Date.now()}`,
             type: "buy",
             token: token.mint,
             inputMint: SOL_MINT,
             outputMint: token.mint,
-            amount: lamports,
-            price: token.price,
-            pnl,
-            wallet: ENV.SERVER_PUBLIC_KEY || undefined,
-            simulated: false,
-            signature: swapResult.signature ?? null,
+            amountLamports: lamports,
+            amountSol,
+            price,
+            pnl: 0,
+            wallet,
+            simulated: !!swap.simulated,
+            signature: swap.signature ?? null,
             timestamp: new Date(),
         };
-        if (swapResult.signature) {
-            tradePayload.id = `onchain-${swapResult.signature}`;
-        }
-        const record = await dbService.addTrade(tradePayload);
-        // emit to sockets (if socket available via app)
-        try {
-            const io = global.__IO;
-            if (io && typeof io.emit === "function") {
-                io.emit("token:autobuy", { success: true, trade: record });
-            }
-        }
-        catch (e) {
-            log.warn("No global io to emit autobuy event");
-        }
+        const record = await dbService.addTrade(trade);
+        emitUpdate(record, "autobuy");
         return { success: true, data: record };
     }
     catch (err) {
-        log.error("autoBuyToken error: " + (err?.message || String(err)));
-        return { success: false, error: err?.message ?? String(err) };
+        log.error({ err: err.message }, "⚠ autoBuyToken");
+        return { success: false, error: err.message };
     }
 }
-export async function autoSellPosition(position) {
+export async function autoSellPosition({ tokenMint, amountSol, }) {
     try {
-        const lamports = Math.round(position.amountSol * 1e9);
+        const wallet = resolveWallet();
+        const lamports = Math.round(amountSol * 1e9);
         if (lamports <= 0)
-            throw new Error("No amount to sell");
-        // Sell token -> SOL
-        const quote = await jupiter.getJupiterQuote(position.tokenMint, SOL_MINT, lamports, ENV.DEFAULT_SLIPPAGE);
+            throw new Error("Invalid sell amount");
+        const slippage = ENV.DEFAULT_SLIPPAGE_PCT ?? 1;
+        const quote = await getJupiterQuote(tokenMint, SOL_MINT, lamports, slippage);
         if (!quote)
-            throw new Error("No quote for sell");
-        const swapResult = await jupiter.executeJupiterSwap({
-            quoteResponse: quote,
-            inputMint: position.tokenMint,
+            throw new Error("Failed to get Jupiter quote");
+        const swap = await executeJupiterSwap({
+            inputMint: tokenMint,
             outputMint: SOL_MINT,
             amount: lamports,
-            userPublicKey: ENV.SERVER_PUBLIC_KEY || ENV.DEFAULT_SERVER_WALLET || "",
-            slippage: ENV.DEFAULT_SLIPPAGE,
+            userPublicKey: wallet,
+            slippage,
         });
-        if (!swapResult.success) {
-            throw new Error(swapResult.error ?? "Swap failed");
-        }
-        const sellPayload = {
+        if (!swap.success)
+            throw new Error(swap.error);
+        const price = Number(quote.outAmount ?? 0) / 1e9 / (lamports / 1e9) || 0;
+        const trade = {
+            id: `autoSell-${Date.now()}`,
             type: "sell",
-            token: position.tokenMint,
-            inputMint: position.tokenMint,
+            token: tokenMint,
+            inputMint: tokenMint,
             outputMint: SOL_MINT,
-            amount: lamports,
-            price: position.minAcceptPrice ?? undefined,
-            pnl: undefined, // will be computed by monitoring or DB
-            wallet: ENV.SERVER_PUBLIC_KEY || undefined,
-            simulated: false,
-            signature: swapResult.signature ?? null,
+            amountLamports: lamports,
+            amountSol,
+            price,
+            pnl: 0, // computed later
+            wallet,
+            simulated: !!swap.simulated,
+            signature: swap.signature ?? null,
             timestamp: new Date(),
         };
-        if (swapResult.signature) {
-            sellPayload.id = `onchain-${swapResult.signature}`;
-        }
-        const sellRecord = await dbService.addTrade(sellPayload);
-        // try to emit
-        try {
-            const io = global.__IO;
-            if (io && typeof io.emit === "function") {
-                io.emit("tradeFeed", {
-                    id: sellRecord.id,
-                    type: "sell",
-                    token: sellRecord.token,
-                    amount: sellPayload.amount,
-                    price: sellRecord.price,
-                    signature: sellRecord.signature,
-                    timestamp: sellRecord.timestamp,
-                    auto: true,
-                    reason: "TP/SL",
-                });
-            }
-        }
-        catch (e) {
-            log.warn("No socket to emit sell event");
-        }
-        return { success: true, data: sellRecord };
+        const record = await dbService.addTrade(trade);
+        emitUpdate(record, "autotakeprofit");
+        return { success: true, data: record };
     }
     catch (err) {
-        log.error("autoSellPosition error: " + (err?.message || String(err)));
-        return { success: false, error: err?.message ?? String(err) };
+        log.error({ err: err.message }, "⚠ autoSellPosition");
+        return { success: false, error: err.message };
+    }
+}
+/** Socket Notify Helper */
+function emitUpdate(trade, reason) {
+    try {
+        const io = global.__IO;
+        if (!io)
+            return;
+        io.emit("tradeFeed", {
+            ...trade,
+            auto: true,
+            reason,
+        });
+    }
+    catch {
+        /* ignored */
     }
 }
 //# sourceMappingURL=auto-trader.js.map

@@ -6,54 +6,67 @@ import { Card, CardHeader, CardTitle, CardContent } from "@components/ui/card";
 import { fetcher, formatNumber } from "@lib/utils";
 import { Loader2 } from "lucide-react";
 import { useSocket } from "@hooks/useSocket";
-import { useStats } from "@hooks/useStats";
+
+// Shared type from backend socket payload
+interface TokenWithPrice {
+  symbol: string;
+  mint: string;
+  price: number | null;
+  pnl: number | null;
+  liquidity: number | null;
+  marketCap: number | null;
+}
+
+// API response type
+interface TokenApiResponse {
+  success: boolean;
+  tokens: TokenWithPrice[];
+}
 
 export default function TokenTable() {
-  const { data, error, isLoading, mutate } = useSWR("/api/tokens", fetcher, {
-    refreshInterval: 8000, // auto-refresh every 8s
-  });
-
-  const { connected, lastMessage } = useSocket();
-  const { updateStats, stats } = useStats();
-
-  // 🔁 Real-time socket updates
-  useEffect(() => {
-    if (lastMessage?.event === "tokenUpdate") {
-      // Update token data in real-time
-      mutate();
-
-      // Update dashboard stats dynamically
-      if (lastMessage.payload?.pnlChange) {
-        updateStats({
-          totalProfit: stats.totalProfit + lastMessage.payload.pnlChange,
-        });
-      }
+  const { data, mutate, isLoading, error } = useSWR<TokenApiResponse>(
+    "/api/tokens",
+    fetcher,
+    {
+      refreshInterval: 10000,
     }
-  }, [lastMessage, mutate, updateStats, stats]);
+  );
 
-  if (error)
-    return (
-      <Card className="bg-base-200 rounded-xl shadow p-4 text-center text-red-400">
-        Failed to load token data.
-      </Card>
-    );
+  const { lastMessage, connected } = useSocket();
+
+  /** SOCKET — realtime token refresh */
+  useEffect(() => {
+    if (!lastMessage?.event) return;
+    if (lastMessage.event !== "token_prices") return; // Correct event name
+
+    mutate(); // 🔄 Update SWR cache live
+  }, [lastMessage, mutate]);
 
   if (isLoading)
     return (
-      <Card className="bg-base-200 rounded-xl shadow p-6 flex items-center justify-center">
-        <Loader2 className="animate-spin text-primary" size={28} />
-        <span className="ml-2 text-sm text-gray-400">Loading tokens...</span>
+      <Card className="bg-base-200 p-6 text-center">
+        <Loader2 className="animate-spin text-primary mx-auto" />
+        <p className="text-gray-400 text-sm mt-2">Loading tokens…</p>
       </Card>
     );
+
+  if (error || !data?.tokens)
+    return (
+      <Card className="bg-base-200 p-4 text-center text-red-400">
+        Failed to load tokens
+      </Card>
+    );
+
+  const tokens = data.tokens ?? [];
 
   return (
     <Card className="bg-base-200 rounded-xl shadow p-4">
       <CardHeader>
-        <CardTitle className="text-lg font-semibold text-primary flex justify-between items-center">
+        <CardTitle className="text-lg font-semibold flex justify-between items-center">
           <span>Active Tokens</span>
           <span
             className={`text-xs ${
-              connected ? "text-green-400" : "text-gray-500"
+              connected ? "text-green-400" : "text-red-400"
             }`}
           >
             {connected ? "🟢 Live" : "⚫ Offline"}
@@ -66,24 +79,29 @@ export default function TokenTable() {
           <thead>
             <tr className="text-gray-400 border-b border-base-300">
               <th className="text-left py-2">Token</th>
-              <th className="text-right py-2">Price (SOL)</th>
-              <th className="text-right py-2">PNL (%)</th>
+              <th className="text-right py-2">Price</th>
+              <th className="text-right py-2">24h</th>
             </tr>
           </thead>
+
           <tbody>
-            {data?.tokens?.map((token: any) => (
+            {tokens.map((t) => (
               <tr
-                key={token.symbol}
-                className="border-b border-base-300 hover:bg-base-300/30 transition"
+                key={t.mint}
+                className="border-b border-base-300 hover:bg-base-300/20"
               >
-                <td className="font-medium text-left py-2">{token.symbol}</td>
-                <td className="text-right py-2">{formatNumber(token.price)}</td>
+                <td className="py-2 font-medium">{t.symbol}</td>
+
+                <td className="py-2 text-right">
+                  {t.price !== null ? formatNumber(t.price) : "—"}
+                </td>
+
                 <td
-                  className={`text-right py-2 ${
-                    token.pnl > 0 ? "text-green-400" : "text-red-400"
+                  className={`py-2 text-right ${
+                    (t.pnl || 0) >= 0 ? "text-green-400" : "text-red-400"
                   }`}
                 >
-                  {token.pnl > 0 ? `+${token.pnl}` : token.pnl}%
+                  {t.pnl !== null ? `${t.pnl > 0 ? "+" : ""}${t.pnl}%` : "—"}
                 </td>
               </tr>
             ))}

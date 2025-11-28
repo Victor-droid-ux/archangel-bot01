@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   PlayCircle,
   PauseCircle,
@@ -19,8 +19,8 @@ import { toast } from "react-hot-toast";
 import { motion } from "framer-motion";
 
 export default function ActionsBar() {
-  const { connected, publicKey } = useWallet();
-  const { amount, slippage } = useTradingConfigStore();
+  const { connected } = useWallet();
+  const { selectedToken } = useTradingConfigStore();
   const { executeTrade } = useTrade();
   const { updateStats, stats } = useStats();
   const { sendMessage, connected: socketConnected } = useSocket();
@@ -28,154 +28,129 @@ export default function ActionsBar() {
   const [loading, setLoading] = useState(false);
   const [autoTrading, setAutoTrading] = useState(false);
 
-  // Manual trade
-  const handleTrade = React.useCallback(
+  const handleTrade = useCallback(
     async (type: "buy" | "sell") => {
       if (!connected) {
         toast.error("Please connect your wallet first.");
         return;
       }
 
+      setLoading(true);
+      toast.loading(`${type === "buy" ? "Buying" : "Selling"}...`, {
+        id: "trade-status",
+      });
+
       try {
-        setLoading(true);
-        toast.loading(`${type === "buy" ? "Buying" : "Selling"} tokens...`, {
-          id: "trade",
-        });
+        const payload = await executeTrade(type, selectedToken || "BONK");
+        if (!payload) throw new Error("No payload");
 
-        // 🪙 Execute trade via custom hook
-        const result = await executeTrade(type, "BONK");
-
-        toast.dismiss("trade");
-
-        if (!result.success) throw new Error(result.message);
+        toast.dismiss("trade-status");
 
         toast.success(
-          `${type === "buy" ? "✅ Bought" : "✅ Sold"} ${result.data.token} (${
-            result.data.amount
-          } SOL)`
+          `${
+            payload.simulated ? "🧪 Simulated" : "🚀 Live"
+          } ${type.toUpperCase()} ${payload.token} (${payload.amount})`
         );
 
-        // 📡 Emit live trade event to socket
+        // Emit to socket feed
         sendMessage("tradeLog", {
-          type,
-          token: result.data.token,
-          amount: result.data.amount,
-          time: new Date().toLocaleTimeString(),
+          type: payload.type,
+          token: payload.token,
+          amount: payload.amount,
+          pnl: payload.pnl,
+          signature: payload.signature,
+          time: new Date().toISOString(),
         });
 
-        // 📊 Update stats
-        updateStats({
-          totalProfit:
-            stats.totalProfit +
-            (type === "buy" ? -result.data.pnl : result.data.pnl),
-        });
+        // Update local stats
+        if (typeof payload.pnl === "number") {
+          const profitDelta = payload.pnl * 100; // convert to %
+          updateStats({
+            totalProfitSol: stats.totalProfitSol + profitDelta / 100,
+            totalProfitPercent: stats.totalProfitPercent + profitDelta,
+            tradeVolumeSol: stats.tradeVolumeSol + payload.amount,
+          });
+        }
       } catch (err: any) {
-        toast.dismiss("trade");
-        toast.error("❌ Trade failed. Try again.");
+        toast.dismiss("trade-status");
+        toast.error("❌ Trade failed");
         console.error(err);
-      } finally {
-        setLoading(false);
       }
+
+      setLoading(false);
     },
-    [connected, executeTrade, sendMessage, updateStats, stats]
+    [connected, executeTrade, selectedToken, sendMessage, updateStats, stats]
   );
 
-  // Auto trading simulation
   useEffect(() => {
     if (!autoTrading) return;
-
     const interval = setInterval(() => {
       const randomType = Math.random() > 0.5 ? "buy" : "sell";
       handleTrade(randomType);
     }, 15000);
-
     return () => clearInterval(interval);
   }, [autoTrading, handleTrade]);
 
-  const toggleAutoTrade = () => {
+  const toggleAuto = () => {
     if (!connected) {
-      toast.error("Connect wallet before enabling auto-trade.");
+      toast.error("Connect wallet to enable auto-trading");
       return;
     }
-
-    setAutoTrading((prev) => !prev);
-    toast.success(
-      !autoTrading
-        ? "🤖 Auto-trade activated — monitoring markets..."
-        : "⏹️ Auto-trade stopped."
-    );
+    setAutoTrading((v) => !v);
   };
 
   return (
     <motion.div
-      className="bg-base-200 rounded-xl p-5 flex flex-wrap justify-center md:justify-between items-center gap-4 border border-base-300 shadow-sm"
-      initial={{ opacity: 0, y: 15 }}
+      className="bg-base-200 rounded-xl p-5 flex flex-wrap justify-between items-center gap-4 border border-base-300 shadow-sm"
+      initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
+      transition={{ duration: 0.3 }}
     >
       <div className="flex items-center gap-2 text-primary">
         <Zap size={18} className="text-yellow-400" />
         <h2 className="text-lg font-semibold">Trading Controls</h2>
       </div>
 
-      <div className="flex flex-wrap gap-3 items-center">
+      <div className="flex gap-3 items-center flex-wrap">
         {/* Socket status */}
         <span
-          className={`text-xs font-mono ${
+          className={`text-xs ${
             socketConnected ? "text-green-400" : "text-red-400"
           }`}
         >
-          Socket: {socketConnected ? "Connected" : "Offline"}
+          🔌 {socketConnected ? "Live" : "Offline"}
         </span>
 
-        {/* Buy button */}
         <Button
           variant="secondary"
-          onClick={() => handleTrade("buy")}
           disabled={!connected || loading}
-          className="flex items-center gap-2 hover:scale-105 transition"
+          onClick={() => handleTrade("buy")}
+          className="flex items-center gap-2"
         >
-          {loading ? (
-            <Loader2 size={18} className="animate-spin" />
-          ) : (
-            <TrendingUp size={18} />
-          )}
-          {loading ? "Executing..." : "Buy"}
+          {loading ? <Loader2 className="animate-spin" /> : <TrendingUp />}
+          Buy
         </Button>
 
-        {/* Sell button */}
         <Button
           variant="danger"
-          onClick={() => handleTrade("sell")}
           disabled={!connected || loading}
-          className="flex items-center gap-2 hover:scale-105 transition"
+          onClick={() => handleTrade("sell")}
+          className="flex items-center gap-2"
         >
-          {loading ? (
-            <Loader2 size={18} className="animate-spin" />
-          ) : (
-            <TrendingDown size={18} />
-          )}
-          {loading ? "Executing..." : "Sell"}
+          {loading ? <Loader2 className="animate-spin" /> : <TrendingDown />}
+          Sell
         </Button>
 
-        {/* Auto-trade toggle */}
         <Button
           variant="primary"
-          onClick={toggleAutoTrade}
           disabled={!connected}
-          className={`flex items-center gap-2 hover:scale-105 transition ${
+          onClick={toggleAuto}
+          className={`flex items-center gap-2 ${
             autoTrading ? "bg-green-700" : ""
           }`}
         >
-          {autoTrading ? (
-            <>
-              <PauseCircle size={18} /> Stop Auto-Trade
-            </>
-          ) : (
-            <>
-              <PlayCircle size={18} /> Start Auto-Trade
-            </>
-          )}
+          {autoTrading ? <PauseCircle /> : <PlayCircle />}
+          {autoTrading ? "Stop Auto" : "Auto Trade"}
         </Button>
       </div>
     </motion.div>

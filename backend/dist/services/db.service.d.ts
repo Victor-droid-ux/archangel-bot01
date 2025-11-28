@@ -32,7 +32,7 @@ declare function addTrade(input: {
     token: string;
     inputMint?: string;
     outputMint?: string;
-    amount: number;
+    amountLamports: number;
     price?: number;
     pnl?: number;
     wallet?: string;
@@ -42,7 +42,11 @@ declare function addTrade(input: {
 }): Promise<TradeRecord>;
 declare function getTrades(limit?: number): Promise<import("mongodb").WithId<TradeRecord>[]>;
 declare function getStats(): Promise<import("mongodb").WithId<StatsDoc>>;
-declare function getPositions(): Promise<import("bson").Document[]>;
+declare function getPositions(): Promise<Array<{
+    token: string;
+    netSol: number;
+    avgBuyPrice?: number;
+}>>;
 declare function updateStats(updates: Partial<StatsDoc>): Promise<import("mongodb").WithId<StatsDoc>>;
 declare function close(): Promise<void>;
 declare const _default: {

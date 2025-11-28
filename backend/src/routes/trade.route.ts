@@ -1,313 +1,216 @@
+// backend/src/routes/trade.route.ts
 import { Router, Request, Response } from "express";
-import { getJupiterQuote, executeJupiterSwap } from "../lib/jupiter.js";
-import dbService from "../services/db.service.js";
 import crypto from "crypto";
+import {
+  getJupiterQuote,
+  executeJupiterSwap,
+} from "../services/jupiter.service.js";
+import dbService, { TradeRecord } from "../services/db.service.js";
 
 const router = Router();
 
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+
+// Same shape as frontend-trading request
 interface TradeRequest {
   type: "buy" | "sell";
   inputMint?: string;
   outputMint: string;
-  amount: number;
-  wallet: string;
+  amount: number; // lamports
+  wallet?: string;
   slippage?: number;
 }
 
-interface DbTrade {
-  id?: string;
-  type: "buy" | "sell";
-  token: string;
-  inputMint?: string;
-  outputMint?: string;
-  amount: number;
-  price?: number;
-  pnl?: number;
-  wallet?: string;
-  simulated?: boolean;
-  signature?: string | null;
-  timestamp?: string | Date;
-}
-
-/**
- * POST /api/trade
- * Executes a Solana trade (real or simulated) and emits live socket updates.
- */
+/* ------------------------------------------------------
+    MAIN EXECUTE TRADE (Manual Buy/Sell from Frontend UI)
+------------------------------------------------------- */
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const body: TradeRequest = req.body;
     const {
       type,
-      inputMint = "So11111111111111111111111111111111111111112", // SOL
+      inputMint = SOL_MINT,
       outputMint,
       amount,
       wallet,
       slippage = 1,
-    } = body;
+    } = req.body as TradeRequest;
 
-    if (!type || !outputMint || !amount || !wallet) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Missing required parameters: type, outputMint, amount, or wallet.",
-      });
+    if (!type || !outputMint || !amount) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing trade parameters" });
     }
 
-    console.log(`${type.toUpperCase()} request:`, {
-      inputMint,
-      outputMint,
-      amount,
-      wallet,
-    });
+    // Wallet fallback for server-initiated trades
+    const userPublicKey =
+      wallet ||
+      process.env.BACKEND_RECEIVER_WALLET ||
+      process.env.SERVER_PUBLIC_KEY;
 
-    // --------------------------
-    // 1. Get Jupiter Quote
-    // --------------------------
+    if (!userPublicKey)
+      throw new Error("User wallet missing (server wallet fallback required)");
+
     const quote = await getJupiterQuote(
       inputMint,
       outputMint,
       amount,
       slippage
     );
-    if (!quote) throw new Error("Failed to get Jupiter quote.");
+    if (!quote) throw new Error("Failed to fetch Jupiter quote");
 
-    const expectedOutput = quote.outAmount / 1e9;
+    const useReal = process.env.USE_REAL_SWAP === "true";
 
-    // --------------------------
-    // 2. Real Swap or Simulation
-    // --------------------------
-    const useRealSwap = process.env.USE_REAL_SWAP === "true";
-    let result: any;
+    const swap = useReal
+      ? await executeJupiterSwap({
+          inputMint,
+          outputMint,
+          amount,
+          userPublicKey,
+          slippage,
+        })
+      : {
+          success: true as const,
+          simulated: true,
+          signature: `sim-${Date.now()}`,
+        };
 
-    if (useRealSwap) {
-      console.log("🚀 Executing real Jupiter swap...");
-      result = await executeJupiterSwap({
-        inputMint,
-        outputMint,
-        amount,
-        userPublicKey: wallet,
-        slippage,
-      });
-    } else {
-      console.log("🧪 Simulating trade...");
-      result = {
-        success: true,
-        simulated: true,
-        signature: "simulated-tx-" + Date.now(),
-      };
-    }
+    if (!swap.success) throw new Error(swap.error ?? "Swap failed");
 
-    if (!result?.success)
-      throw new Error(result.error || "Trade execution failed.");
-
-    // --------------------------
-    // 3. Compute PnL + Price
-    // --------------------------
-    const pnl = Number((Math.random() * 0.05 - 0.02).toFixed(3)); // -2% → +5%
-    const price = Number((Math.random() * 0.002 + 0.0005).toFixed(6));
-
-    const tradeId = crypto.randomUUID();
-    // --------------------------
-    // 4. Save full trade to DB
-    // --------------------------
-    const tradeData: DbTrade = {
-      id: tradeId,
+    const trade: TradeRecord = {
+      id: crypto.randomUUID(),
       type,
       token: outputMint,
       inputMint,
       outputMint,
-      amount,
-      price: typeof price === 'number' ? price : 0,
-      pnl,
-      wallet: wallet || "",
-      simulated: !useRealSwap,
-      signature: result.signature ?? null,
+      amountLamports: amount,
+      amountSol: amount / 1e9,
+      price: Number((Math.random() * 0.002 + 0.0008).toFixed(6)),
+      pnl: Number((Math.random() * 0.05 - 0.02).toFixed(3)),
+      wallet: userPublicKey,
+      simulated: !useReal,
+      signature: swap.signature ?? null,
       timestamp: new Date(),
     };
 
-    await dbService.addTrade(tradeData);
+    await dbService.addTrade(trade);
 
-    // --------------------------
-    // 5. Emit to frontend via sockets
-    // --------------------------
-    const io =
-      (req.app && (req.app.get("io") as any)) ||
-      (req.app && (req.app.locals as any)?.io);
+    req.app?.get("io")?.emit("tradeFeed", trade);
 
-    if (io && typeof io.emit === "function") {
-      io.emit("tradeFeed", tradeData);
-      console.log("📡 Emitted tradeFeed:", tradeData);
-    }
-
-    // --------------------------
-    // 6. Respond
-    // --------------------------
-    const message = useRealSwap
-      ? `${type.toUpperCase()} executed successfully`
-      : `${type.toUpperCase()} simulated successfully`;
-
-    return res.json({
-      success: true,
-      message: message,
-      data: tradeData,
-    });
+    return res.json({ success: true, data: trade });
   } catch (err: any) {
-    console.error("❌ Trade execution error:", err.message);
-
-    return res.status(500).json({
-      success: false,
-      message: err.message || "Trade execution failed.",
-    });
+    console.error("Trade error:", err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// inside trade.route.ts add new route
+/* ------------------------------------------------------
+    AUTO-SELL POSITION ENDPOINT (hit from UI)
+------------------------------------------------------- */
 router.post("/close", async (req, res) => {
   try {
-    const { tokenMint, positionId, wallet } = req.body;
-    if (!tokenMint && !positionId) return res.status(400).json({ success: false, message: "Provide tokenMint or positionId" });
+    const { tokenMint } = req.body;
+    if (!tokenMint)
+      return res
+        .status(400)
+        .json({ success: false, message: "tokenMint required" });
 
-    // derive amount & other details from db
     const positions = await dbService.getPositions();
-    const pos = positionId ? positions.find((p: any) => p._id === positionId) : positions.find((p: any) => p.token === tokenMint);
-    if (!pos) return res.status(404).json({ success: false, message: "Position not found" });
+    const pos = positions.find((p) => p.token === tokenMint);
 
-    const sellRes = await autoSellPosition({
+    if (!pos || pos.netSol <= 0)
+      return res.status(404).json({
+        success: false,
+        message: "No open position for that token",
+      });
+
+    const result = await autoSellPosition({
       tokenMint: pos.token,
       amountSol: pos.netSol,
-      id: pos._id,
+      wallet: process.env.BACKEND_RECEIVER_WALLET ?? "",
     });
 
-    if (!sellRes.success) return res.status(500).json({ success: false, message: sellRes.error });
+    if (!result.success) {
+      return res.status(500).json({ success: false, message: result.error });
+    }
 
-    return res.json({ success: true, data: sellRes.data });
+    // emit socket update here
+    const io = req.app?.get("io");
+    if (io) {
+      io.emit("tradeFeed", {
+        ...result.data,
+        auto: true,
+        reason: "TP/SL",
+      });
+    }
+
+    return result.success
+      ? res.json({ success: true, data: result.data })
+      : res.status(500).json({ success: false, message: result.error });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message });
   }
 });
 
+/* ------------------------------------------------------
+    INTERNAL — AUTO-SELL POSITION
+------------------------------------------------------- */
 async function autoSellPosition({
   tokenMint,
   amountSol,
-  id,
-  minAcceptPrice,
+  wallet,
 }: {
-  tokenMint: any;
-  amountSol: any;
-  id: any;
-  minAcceptPrice?: number;
-}): Promise<{ success: boolean; data?: any; error?: string }> {
+  tokenMint: string;
+  amountSol: number;
+  wallet: string;
+}) {
   try {
-    const SOL_MINT = "So11111111111111111111111111111111111111112";
+    const lamportsToSell = Math.round(amountSol * 1e9);
+    const userPublicKey =
+      process.env.BACKEND_RECEIVER_WALLET || process.env.SERVER_PUBLIC_KEY;
 
-    // locate position (prefer id, fall back to tokenMint)
-    let pos: any | undefined;
-    const positions = await dbService.getPositions();
-    if (id) {
-      pos = positions.find((p: any) => p._id === id);
-    } else if (tokenMint) {
-      pos = positions.find(
-        (p: any) => p.token === tokenMint || p.tokenMint === tokenMint
-      );
-    }
+    if (!userPublicKey)
+      throw new Error("Server wallet missing for auto-sell swap");
 
-    if (!pos) return { success: false, error: "Position not found" };
+    const useReal = process.env.USE_REAL_SWAP === "true";
 
-    // try to determine how many token units to sell
-    // common fields: amount, tokenAmount, quantity, balance
-    const tokenAmount =
-      pos.amount ?? pos.tokenAmount ?? pos.quantity ?? pos.balance;
-    if (!tokenAmount) {
-      // if we only have an SOL valuation and a minAcceptPrice, estimate token amount
-      if (amountSol && minAcceptPrice) {
-        // estimate token amount = SOL value / price (both assumed same base units)
-        // caller should prefer providing token amount on the position; this is a best-effort fallback
-        // guard division
-        if (minAcceptPrice <= 0) {
-          return { success: false, error: "Invalid minAcceptPrice" };
-        }
-        // NOTE: units are best-effort; adjust if your app stores decimals/units differently
-        // here we assume amountSol is in SOL and minAcceptPrice is SOL per token
-        // tokenAmount is returned in "token units" (not lamports)
-        // convert to an integer-ish value
-        // Keep as a float if needed by downstream functions
-        // This fallback is conservative and may not be accurate for all tokens.
-        (pos as any).estimatedTokenAmount = amountSol / minAcceptPrice;
-      } else {
-        return {
-          success: false,
-          error:
-            "Position does not contain a token amount. Provide amount on position or minAcceptPrice to estimate.",
-        };
-      }
-    }
-
-    const amountToSell = tokenAmount ?? (pos as any).estimatedTokenAmount;
-    if (!amountToSell || Number(amountToSell) <= 0) {
-      return { success: false, error: "Computed sell amount is invalid" };
-    }
-
-    const slippage = 1; // default slippage %
-    // get a quote: token -> SOL
-    const quote = await getJupiterQuote(tokenMint, SOL_MINT, amountToSell, slippage);
-    if (!quote) return { success: false, error: "Failed to fetch Jupiter quote" };
-
-    const useRealSwap = process.env.USE_REAL_SWAP === "true";
-    let result: any;
-
-    if (useRealSwap) {
-      result = await executeJupiterSwap({
-        inputMint: tokenMint,
-        outputMint: SOL_MINT,
-        amount: amountToSell,
-        userPublicKey: pos.wallet ?? undefined,
-        slippage,
-      });
-    } else {
-      result = {
-        success: true,
-        simulated: true,
-        signature: "simulated-close-" + Date.now(),
-      };
-    }
-
-    if (!result?.success) {
-      return { success: false, error: result.error || "Swap execution failed" };
-    }
-
-    // basic trade metadata
-    const tradeId = crypto.randomUUID();
-    const pnl = Number((Math.random() * 0.05 - 0.02).toFixed(3));
-    // price as SOL received / token units sold (best-effort)
-    const solReceived = quote.outAmount ? quote.outAmount / 1e9 : undefined;
-    const price =
-      solReceived && Number(amountToSell)
-        ? Number((solReceived / Number(amountToSell)).toFixed(9))
-        : undefined;
-
-        // persist the trade in DB
-        const tradeRecord: DbTrade = {
-          id: tradeId,
-          type: "sell",
-          token: tokenMint,
+    const swap = useReal
+      ? await executeJupiterSwap({
           inputMint: tokenMint,
           outputMint: SOL_MINT,
-          amount: amountToSell,
-          price: typeof price === 'number' ? price : 0,
-          pnl,
-          wallet: pos.wallet || "",
-          simulated: !useRealSwap,
-          signature: result.signature ?? null,
-          timestamp: new Date(),
+          amount: lamportsToSell,
+          userPublicKey,
+          slippage: 1,
+        })
+      : {
+          success: true as const,
+          simulated: true,
+          signature: `sim-close-${Date.now()}`,
         };
-    
-        await dbService.addTrade(tradeRecord);
-    
-        return { success: true, data: tradeRecord };
-      } catch (err: any) {
-        // Return a consistent error shape for callers
-        return { success: false, error: err?.message ?? String(err) };
-      }
-    }
-    
-    export default router;
+
+    if (!swap.success) throw new Error(swap.error);
+
+    const trade: TradeRecord = {
+      id: crypto.randomUUID(),
+      type: "sell",
+      token: tokenMint,
+      inputMint: tokenMint,
+      outputMint: SOL_MINT,
+      amountLamports: lamportsToSell,
+      amountSol,
+      //price: null,
+      pnl: null as any,
+      wallet: userPublicKey,
+      simulated: !useReal,
+      signature: swap.signature ?? null,
+      timestamp: new Date(),
+    };
+
+    await dbService.addTrade(trade);
+
+    return { success: true, data: trade };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+export default router;

@@ -1,8 +1,5 @@
-// 🔐 Load environment variables FIRST before anything else
+// backend/src/index.ts
 import dotenv from "dotenv";
-import { initTokenPriceService } from "./services/tokenPrice.service.js";
-
-
 dotenv.config();
 
 import express from "express";
@@ -12,108 +9,74 @@ import { Server as SocketIOServer } from "socket.io";
 
 import tradeRoutes from "./routes/trade.route.js";
 import statsRoutes from "./routes/stats.route.js";
-import logger from "./utils/logger.js";
-import { ENV } from "./utils/env.js";
 import tokensRoutes from "./routes/tokens.route.js";
-import { registerSocketHandlers } from "./routes/socket.route.js";
-import dbService from "./services/db.service.js";
-import { startPositionMonitor } from "./services/monitor.service.js";
-import { startTokenWatcher } from "./services/token-watcher.js";
-import { getLogger } from "./utils/logger.js";
-import { startTokenDiscovery } from "./services/tokenDiscovery.service.js";
-import { startPriceStreamer } from "./services/priceStreamer.service.js";
 import positionsRoutes from "./routes/positions.route.js";
+
+import { registerSocketHandlers } from "./routes/socket.route.js";
+
+import dbService from "./services/db.service.js";
+import { initTokenPriceService } from "./services/tokenPrice.service.js";
+import { startTokenWatcher } from "./services/token-watcher.js";
+import { startPositionMonitor } from "./services/monitor.service.js";
+import { getLogger } from "./utils/logger.js";
+import { ENV } from "./utils/env.js";
 
 const log = getLogger("index");
 
-// ⚡ Initialize DB connection BEFORE server startup
 (async () => {
   try {
-    await dbService.connect(); // connect to MongoDB
-    console.log("✅ MongoDB connected");
+    await dbService.connect();
+    log.info("✅ MongoDB connected");
   } catch (err: any) {
-    console.error("❌ Failed to connect to DB:", err.message);
-    process.exit(1); // Stop server if DB connection fails
+    log.error("❌ Failed to connect to DB: " + String(err));
+    process.exit(1);
   }
-})();
 
-const app = express();
+  const app = express();
 
-// 🌍 CORS configuration
-app.use(
-  cors({
-    origin: ENV.FRONTEND_URL,
-    methods: ["GET", "POST"],
-    credentials: true,
-  })
-);
+  app.use(
+    cors({
+      origin: ENV.FRONTEND_URL || "*",
+      methods: ["GET", "POST"],
+      credentials: true,
+    })
+  );
 
-app.use(express.json());
+  app.use(express.json());
 
-// 🟢 Health Check Route
-app.get("/", (_, res) => {
-  res.json({ message: "🚀 ArchAngel Backend Running" });
-});
+  app.get("/", (_, res) =>
+    res.json({ message: "🚀 ArchAngel Backend Running" })
+  );
 
-// 📌 API Routes
-app.use("/api/trade", tradeRoutes);
-app.use("/api/stats", statsRoutes);
-app.use("/api/tokens", tokensRoutes);
-app.use("/api/positions", positionsRoutes);
+  app.use("/api/trade", tradeRoutes);
+  app.use("/api/stats", statsRoutes);
+  app.use("/api/tokens", tokensRoutes);
+  app.use("/api/positions", positionsRoutes);
 
-// ⚙️ HTTP + WebSocket setup
-const server = http.createServer(app);
+  const server = http.createServer(app);
 
-const io = new SocketIOServer(server, {
-  cors: {
-    origin: ENV.FRONTEND_URL || "*",
-    methods: ["GET", "POST"],
-  },
-});
+  const io = new SocketIOServer(server, {
+    cors: {
+      origin: ENV.FRONTEND_URL || "*",
+      methods: ["GET", "POST"],
+    },
+  });
 
-// Attach socket instance to express app
-app.set("io", io);
-app.locals.io = io;
+  app.set("io", io);
+  app.locals.io = io;
+  (globalThis as any).__IO = io;
 
-// 🔌 Register WebSocket event handlers
-registerSocketHandlers(io);
-
-// 🔁 Start live token price streaming every 5 seconds
-initTokenPriceService(io).catch((err: any) => {
-  logger.error("❌ Failed to start token price service: " + err.message);
-});
-
-try {
   registerSocketHandlers(io);
-} catch (e) {
-  log.error("Failed to register socket handlers: " + String(e));
-}
 
-(global as any).__IO = io; // make io globally accessible
+  // These are not Promises — just start them
+  initTokenPriceService(io).catch((e: any) =>
+    log.error("initTokenPriceService failed: " + String(e))
+  );
 
-// start background services
-startTokenWatcher(io).catch((err: any) => {
-  logger.error("❌ Failed to start token watcher: " + String(err));
-});
+  startTokenWatcher(io); // no catch
+  startPositionMonitor(io); // no catch
 
-startTokenDiscovery(io);
-startPositionMonitor(io).catch((err: any) => {
-  logger.error("❌ Failed to start position monitor: " + String(err));
-});
-
-try {
-  startPriceStreamer(io);
-} catch (err: any) {
-  logger.error("❌ Failed to start price streamer: " + String(err));
-}
-
-// 🚨 Global Error Handler
-app.use((err: any, _req: any, res: any, _next: any) => {
-  logger.error("❌ " + (err.message || "Unhandled backend error"));
-  res.status(err.status || 500).json({ success: false, message: err.message });
-});
-
-// 🚀 Start HTTP + Socket Server
-server.listen(ENV.PORT, () => {
-  logger.info(`✅ Backend online → http://localhost:${ENV.PORT}`);
-});
+  server.listen(ENV.PORT, () => {
+    log.info(`⚡ Backend online → http://localhost:${ENV.PORT}`);
+  });
+})();
